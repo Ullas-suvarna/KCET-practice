@@ -1,0 +1,6 @@
+{
+  "name": "KCET Practice Pro",
+  "description": "Complete KCET CBT Mock Tests, Practice Questions, Performance Analytics, Resources & Counselling Guide",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
