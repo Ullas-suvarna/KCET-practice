@@ -47,11 +47,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Surface
 import com.example.data.CounsellingStep
+import com.example.data.ImportantDateItem
 import com.example.data.SampleData
 
 @Composable
-fun CounsellingScreen() {
+fun CounsellingScreen(
+    importantDates: List<ImportantDateItem> = emptyList(),
+    onOpenSeniorChat: () -> Unit = {}
+) {
     val steps = SampleData.counsellingSteps
     val faqs = SampleData.counsellingFaqs
 
@@ -84,6 +91,176 @@ fun CounsellingScreen() {
                 fontSize = 13.sp,
                 color = Color(0xFF64748B)
             )
+        }
+
+        // Live Mentorship Card in Counselling Screen
+        item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xFF0F172A))
+                    .clickable { onOpenSeniorChat() }
+                    .padding(16.dp)
+            ) {
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFFE11D48)
+                        ) {
+                            Text(
+                                text = "💬 SENIOR LIVE CHAT",
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+
+                        Text(
+                            text = "Offer: ₹50",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color(0xFFFEF08A)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = "1-on-1 Personal Advice & Unlimited Doubts",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Text(
+                        text = "Book date & time for live Instagram chat with KCET Senior Mentor @ULLAS_U_SUVARNA.",
+                        fontSize = 12.sp,
+                        color = Color(0xFFCBD5E1)
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Button(
+                        onClick = onOpenSeniorChat,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE11D48)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Book Real-Time Slot (₹50 Only)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // Dynamic Firebase Schedule Section
+        if (importantDates.isNotEmpty()) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(imageVector = Icons.Default.Event, contentDescription = null, tint = Color(0xFF4F46E5), modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Official Important Dates & Schedule",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF0F172A)
+                    )
+                }
+            }
+
+            items(importantDates) { dateItem ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color.White)
+                        .border(
+                            1.dp,
+                            if (dateItem.isHighlighted || dateItem.status == "Active Now") Color(0xFF6366F1) else Color(0xFFE2E8F0),
+                            RoundedCornerShape(20.dp)
+                        )
+                        .padding(16.dp)
+                ) {
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = when (dateItem.status) {
+                                    "Active Now" -> Color(0xFFDCFCE7)
+                                    "Crucial" -> Color(0xFFFEE2E2)
+                                    "Completed" -> Color(0xFFF1F5F9)
+                                    else -> Color(0xFFEEF2FF)
+                                }
+                            ) {
+                                Text(
+                                    text = dateItem.status.uppercase(),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = when (dateItem.status) {
+                                        "Active Now" -> Color(0xFF15803D)
+                                        "Crucial" -> Color(0xFFB91C1C)
+                                        "Completed" -> Color(0xFF64748B)
+                                        else -> Color(0xFF4338CA)
+                                    },
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+
+                            Text(
+                                text = dateItem.dateOrDeadline,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF4F46E5)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Text(
+                            text = dateItem.eventTitle,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0F172A)
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Text(
+                            text = dateItem.description,
+                            fontSize = 12.sp,
+                            color = Color(0xFF475569),
+                            lineHeight = 16.sp
+                        )
+                    }
+                }
+            }
+        }
+
+        // Steps Header
+        item {
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(imageVector = Icons.Default.FormatListNumbered, contentDescription = null, tint = Color(0xFF4F46E5), modifier = Modifier.size(20.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Step-by-Step Counselling Roadmap",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF0F172A)
+                )
+            }
         }
 
         // Steps Checklist

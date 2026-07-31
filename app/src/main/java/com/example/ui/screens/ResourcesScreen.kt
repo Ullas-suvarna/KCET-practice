@@ -21,25 +21,30 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -53,8 +58,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.PdfDownloadHelper
 import com.example.data.ResourceItem
+import com.example.ui.components.PdfViewerDialog
 import kotlinx.coroutines.launch
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,18 +70,56 @@ fun ResourcesScreen(
     resources: List<ResourceItem>
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf("All") }
     var activePreviewPdf by remember { mutableStateOf<ResourceItem?>(null) }
-    val sheetState = rememberModalBottomSheetState()
-    val scope = rememberCoroutineScope()
+    var activePdfDialog by remember { mutableStateOf<Pair<ResourceItem, File>?>(null) }
 
+    val downloadProgressMap = remember { mutableStateMapOf<String, Float>() }
+    val downloadedStateMap = remember { mutableStateMapOf<String, Boolean>() }
+
+    val sheetState = rememberModalBottomSheetState()
     val categories = listOf("All", "Syllabus", "PYQ Papers", "Formula Sheets", "PDF Notes")
+
+    // Check existing downloaded files on launch
+    LaunchedEffect(resources) {
+        resources.forEach { item ->
+            downloadedStateMap[item.id] = PdfDownloadHelper.isPdfDownloaded(context, item.id)
+        }
+    }
 
     val filteredList = resources.filter { item ->
         val matchesCategory = (selectedCategory == "All") || item.category.equals(selectedCategory, ignoreCase = true)
         val matchesQuery = item.title.contains(searchQuery, ignoreCase = true) || item.description.contains(searchQuery, ignoreCase = true)
         matchesCategory && matchesQuery
+    }
+
+    val startDownload: (ResourceItem) -> Unit = { item ->
+        scope.launch {
+            Toast.makeText(context, "Downloading ${item.title}...", Toast.LENGTH_SHORT).show()
+            downloadProgressMap[item.id] = 0.1f
+
+            val result = PdfDownloadHelper.downloadPdf(
+                context = context,
+                item = item,
+                onProgress = { progress ->
+                    downloadProgressMap[item.id] = progress
+                }
+            )
+
+            downloadProgressMap.remove(item.id)
+
+            if (result.isSuccess) {
+                val file = result.getOrNull()!!
+                downloadedStateMap[item.id] = true
+                Toast.makeText(context, "Downloaded ${item.title}! Tap to view offline.", Toast.LENGTH_LONG).show()
+                // Automatically open PDF viewer
+                activePdfDialog = Pair(item, file)
+            } else {
+                Toast.makeText(context, "Download failed: ${result.exceptionOrNull()?.localizedMessage}", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     LazyColumn(
@@ -101,7 +147,7 @@ fun ResourcesScreen(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Download official KEA syllabus, previous year papers, and formula revision sheets.",
+                text = "Download official syllabus, PYQ papers, and formula revision sheets to view offline anytime.",
                 fontSize = 13.sp,
                 color = Color(0xFF64748B)
             )
@@ -151,6 +197,10 @@ fun ResourcesScreen(
 
         // Resources List
         items(filteredList) { item ->
+            val isDownloaded = downloadedStateMap[item.id] == true
+            val isDownloading = downloadProgressMap.containsKey(item.id)
+            val downloadProgress = downloadProgressMap[item.id] ?: 0f
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -158,7 +208,14 @@ fun ResourcesScreen(
                     .clip(RoundedCornerShape(20.dp))
                     .background(Color.White)
                     .border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(20.dp))
-                    .clickable { activePreviewPdf = item }
+                    .clickable {
+                        if (isDownloaded) {
+                            val pdfFile = PdfDownloadHelper.getPdfFile(context, item.id)
+                            activePdfDialog = Pair(item, pdfFile)
+                        } else if (!isDownloading) {
+                            activePreviewPdf = item
+                        }
+                    }
                     .padding(16.dp)
             ) {
                 Row(
@@ -168,31 +225,49 @@ fun ResourcesScreen(
                         modifier = Modifier
                             .size(48.dp)
                             .clip(RoundedCornerShape(14.dp))
-                            .background(Color(0xFFFEE2E2)),
+                            .background(if (isDownloaded) Color(0xFFDCFCE7) else Color(0xFFFEE2E2)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Default.PictureAsPdf,
+                            imageVector = if (isDownloaded) Icons.Default.CheckCircle else Icons.Default.PictureAsPdf,
                             contentDescription = null,
-                            tint = Color(0xFFEF4444),
-                            modifier = Modifier.size(22.dp)
+                            tint = if (isDownloaded) Color(0xFF166534) else Color(0xFFEF4444),
+                            modifier = Modifier.size(24.dp)
                         )
                     }
 
                     Spacer(modifier = Modifier.width(14.dp))
 
                     Column(modifier = Modifier.weight(1f)) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = Color(0xFFEEF2FF)
-                        ) {
-                            Text(
-                                text = item.category.uppercase(),
-                                fontSize = 10.sp,
-                                color = Color(0xFF4F46E5),
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = Color(0xFFEEF2FF)
+                            ) {
+                                Text(
+                                    text = item.category.uppercase(),
+                                    fontSize = 10.sp,
+                                    color = Color(0xFF4F46E5),
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+
+                            if (isDownloaded) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = Color(0xFFDCFCE7)
+                                ) {
+                                    Text(
+                                        text = "OFFLINE READY",
+                                        fontSize = 9.sp,
+                                        color = Color(0xFF166534),
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(4.dp))
@@ -213,17 +288,53 @@ fun ResourcesScreen(
 
                     Box(
                         modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFEEF2FF)),
-                        contentAlignment = Alignment.Center
+                            .padding(start = 8.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Download,
-                            contentDescription = "Download",
-                            tint = Color(0xFF4F46E5),
-                            modifier = Modifier.size(18.dp)
-                        )
+                        if (isDownloading) {
+                            CircularProgressIndicator(
+                                progress = { downloadProgress },
+                                modifier = Modifier.size(36.dp),
+                                color = Color(0xFF4F46E5),
+                                strokeWidth = 3.dp
+                            )
+                        } else if (isDownloaded) {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFDCFCE7))
+                                    .clickable {
+                                        val pdfFile = PdfDownloadHelper.getPdfFile(context, item.id)
+                                        activePdfDialog = Pair(item, pdfFile)
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.OpenInNew,
+                                    contentDescription = "View PDF",
+                                    tint = Color(0xFF166534),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFEEF2FF))
+                                    .clickable {
+                                        startDownload(item)
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Download,
+                                    contentDescription = "Download PDF",
+                                    tint = Color(0xFF4F46E5),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -232,7 +343,7 @@ fun ResourcesScreen(
         item { Spacer(modifier = Modifier.height(20.dp)) }
     }
 
-    // PDF Viewer / Download Preview Sheet
+    // PDF Download Details Modal Sheet
     activePreviewPdf?.let { pdf ->
         ModalBottomSheet(
             onDismissRequest = { activePreviewPdf = null },
@@ -276,6 +387,7 @@ fun ResourcesScreen(
                         Text(text = "📄 Format: ${pdf.fileFormat}", fontSize = 12.sp, color = Color(0xFF475569))
                         Text(text = "💾 File Size: ${pdf.fileSize}", fontSize = 12.sp, color = Color(0xFF475569))
                         Text(text = "🏷️ Subject Tag: ${pdf.yearOrSubject}", fontSize = 12.sp, color = Color(0xFF475569))
+                        Text(text = "🌐 Direct Online Link: Active", fontSize = 12.sp, color = Color(0xFF166534), fontWeight = FontWeight.Bold)
                     }
                 }
 
@@ -283,9 +395,10 @@ fun ResourcesScreen(
 
                 Button(
                     onClick = {
-                        Toast.makeText(context, "Downloading ${pdf.title} (${pdf.fileSize})...", Toast.LENGTH_LONG).show()
+                        val pdfItem = pdf
                         scope.launch { sheetState.hide() }.invokeOnCompletion {
                             activePreviewPdf = null
+                            startDownload(pdfItem)
                         }
                     },
                     modifier = Modifier.fillMaxWidth().height(48.dp),
@@ -294,10 +407,18 @@ fun ResourcesScreen(
                 ) {
                     Icon(imageVector = Icons.Default.FileDownload, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(text = "Download PDF Now", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text(text = "Download PDF For Offline Viewing", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 }
             }
         }
     }
-}
 
+    // Active Offline PDF Render Dialog
+    activePdfDialog?.let { (item, file) ->
+        PdfViewerDialog(
+            resource = item,
+            pdfFile = file,
+            onDismiss = { activePdfDialog = null }
+        )
+    }
+}

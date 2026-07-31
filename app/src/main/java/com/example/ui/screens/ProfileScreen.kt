@@ -1,6 +1,9 @@
 package com.example.ui.screens
 
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,6 +24,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Edit
@@ -28,11 +32,15 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Logout
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -43,7 +51,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import com.example.data.FirebaseService
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -78,7 +91,7 @@ fun ProfileScreen(
     analyticsSummary: AnalyticsSummary? = null,
     isDarkMode: Boolean,
     onToggleDarkMode: () -> Unit,
-    onUpdateProfile: (String, String, String) -> Unit,
+    onUpdateProfile: (String, String, String, String?) -> Unit,
     onUpgradeToPremium: () -> Unit,
     onLogout: () -> Unit,
     onOpenAdmin: () -> Unit,
@@ -94,8 +107,26 @@ fun ProfileScreen(
     var editName by remember { mutableStateOf(userProfile.name) }
     var editRank by remember { mutableStateOf(userProfile.kcetTargetRank) }
     var editStream by remember { mutableStateOf(userProfile.targetStream) }
+    var editPhotoUrl by remember { mutableStateOf(userProfile.photoUrl ?: "") }
 
     var newPass by remember { mutableStateOf("") }
+
+    val galleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            editPhotoUrl = it.toString()
+            // Also update immediately if picked directly
+            onUpdateProfile(
+                userProfile.name,
+                userProfile.kcetTargetRank,
+                userProfile.targetStream,
+                it.toString()
+            )
+            Toast.makeText(context, "Profile photo updated from device gallery!", Toast.LENGTH_SHORT).show()
+        }
+    }
+
 
     LazyColumn(
         modifier = Modifier
@@ -178,19 +209,50 @@ fun ProfileScreen(
                         modifier = Modifier.padding(20.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(80.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFFEEF2FF)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Image(
-                                painter = painterResource(id = R.drawable.img_kcet_icon_1785390517153),
-                                contentDescription = "Profile Photo",
-                                modifier = Modifier.padding(12.dp)
-                            )
+                        Box(contentAlignment = Alignment.BottomEnd) {
+                            Box(
+                                modifier = Modifier
+                                    .size(92.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFEEF2FF))
+                                    .border(2.5.dp, Color(0xFF6366F1), CircleShape)
+                                    .clickable { galleryLauncher.launch("image/*") },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (!userProfile.photoUrl.isNullOrBlank()) {
+                                    coil.compose.AsyncImage(
+                                        model = userProfile.photoUrl,
+                                        contentDescription = "Profile Photo",
+                                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                    )
+                                } else {
+                                    Image(
+                                        painter = painterResource(id = R.drawable.img_kcet_icon_1785390517153),
+                                        contentDescription = "Profile Photo",
+                                        modifier = Modifier.padding(12.dp)
+                                    )
+                                }
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF4F46E5))
+                                    .border(2.dp, Color.White, CircleShape)
+                                    .clickable { galleryLauncher.launch("image/*") },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AddAPhoto,
+                                    contentDescription = "Upload Photo",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
                         }
+
 
                         Spacer(modifier = Modifier.height(12.dp))
 
@@ -422,13 +484,75 @@ fun ProfileScreen(
                         label = { Text("Target Stream") },
                         modifier = Modifier.fillMaxWidth()
                     )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = { galleryLauncher.launch("image/*") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PhotoLibrary,
+                            contentDescription = null,
+                            tint = Color(0xFF4F46E5),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Pick Photo from Gallery / Files", color = Color(0xFF4F46E5), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = editPhotoUrl,
+                        onValueChange = { editPhotoUrl = it },
+                        label = { Text("Profile Photo / Avatar Image URL") },
+                        placeholder = { Text("https://images.unsplash.com/photo-...") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text("Quick Avatar Samples:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF475569))
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        val sampleAvatars = listOf(
+                            "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150",
+                            "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150",
+                            "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150",
+                            "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150"
+                        )
+                        sampleAvatars.forEachIndexed { index, url ->
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(CircleShape)
+                                    .border(
+                                        2.dp,
+                                        if (editPhotoUrl == url) Color(0xFF4F46E5) else Color(0xFFCBD5E1),
+                                        CircleShape
+                                    )
+                                    .clickable { editPhotoUrl = url }
+                            ) {
+                                coil.compose.AsyncImage(
+                                    model = url,
+                                    contentDescription = "Avatar $index",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                )
+                            }
+                        }
+                    }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        onUpdateProfile(editName, editRank, editStream)
-                        Toast.makeText(context, "Profile updated successfully", Toast.LENGTH_SHORT).show()
+                        onUpdateProfile(
+                            editName,
+                            editRank,
+                            editStream,
+                            if (editPhotoUrl.isNotBlank()) editPhotoUrl else null
+                        )
+                        Toast.makeText(context, "Profile photo & details updated successfully", Toast.LENGTH_SHORT).show()
                         showEditProfileDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5))
@@ -444,6 +568,10 @@ fun ProfileScreen(
         )
     }
 
+
+    val profileScope = rememberCoroutineScope()
+    var isNewPassVisible by remember { mutableStateOf(false) }
+
     // Change Password Dialog
     if (showChangePasswordDialog) {
         AlertDialog(
@@ -453,19 +581,46 @@ fun ProfileScreen(
                 OutlinedTextField(
                     value = newPass,
                     onValueChange = { newPass = it },
-                    label = { Text("New Password") },
+                    label = { Text("New Password (min 6 chars)") },
+                    trailingIcon = {
+                        IconButton(onClick = { isNewPassVisible = !isNewPassVisible }) {
+                            Icon(
+                                imageVector = if (isNewPassVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                contentDescription = if (isNewPassVisible) "Hide password" else "Show password"
+                            )
+                        }
+                    },
+                    visualTransformation = if (isNewPassVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        Toast.makeText(context, "Password updated successfully", Toast.LENGTH_SHORT).show()
-                        showChangePasswordDialog = false
+                        val passTrimmed = newPass.trim()
+                        if (passTrimmed.length < 6) {
+                            Toast.makeText(context, "Password must be at least 6 characters long", Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+                        profileScope.launch {
+                            try {
+                                FirebaseService.auth.currentUser?.updatePassword(passTrimmed)
+                                FirebaseService.updateUserPasswordInFirestore(userProfile.email, passTrimmed)
+                                Toast.makeText(context, "Password updated successfully! Please use your new password on next login.", Toast.LENGTH_LONG).show()
+                                showChangePasswordDialog = false
+                                newPass = ""
+                            } catch (e: Exception) {
+                                FirebaseService.updateUserPasswordInFirestore(userProfile.email, passTrimmed)
+                                Toast.makeText(context, "Password updated in account record! Use new password to log in.", Toast.LENGTH_LONG).show()
+                                showChangePasswordDialog = false
+                                newPass = ""
+                            }
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5))
                 ) {
-                    Text("Update")
+                    Text("Update Password")
                 }
             },
             dismissButton = {

@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -48,8 +49,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.Announcement
 import com.example.data.BadgeItem
+import com.example.data.ImportantDateItem
+import com.example.data.RankVsMarksItem
 import com.example.data.TestResultEntity
 import com.example.data.UserProfile
+import com.example.ui.components.RankVsMarksDashboard
 import com.example.viewmodel.BottomTab
 
 @Composable
@@ -57,14 +61,18 @@ fun HomeScreen(
     userProfile: UserProfile,
     latestResult: TestResultEntity?,
     announcements: List<Announcement>,
+    importantDates: List<ImportantDateItem> = emptyList(),
+    rankVsMarksList: List<RankVsMarksItem> = emptyList(),
     userPoints: Int = 450,
     userRank: Int = 5,
     badges: List<BadgeItem> = emptyList(),
     onStartFreeTest: () -> Unit,
     onUpgradeClick: () -> Unit,
     onNavigateTab: (BottomTab) -> Unit,
-    onOpenAdmin: () -> Unit
+    onOpenAdmin: () -> Unit,
+    onOpenSeniorChat: () -> Unit = {}
 ) {
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -72,6 +80,102 @@ fun HomeScreen(
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
         item { Spacer(modifier = Modifier.height(10.dp)) }
+
+        // Featured Senior Live Chat Banner Card
+        item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(
+                        Brush.horizontalGradient(
+                            colors = listOf(Color(0xFF881337), Color(0xFFBE123C), Color(0xFFE11D48))
+                        )
+                    )
+                    .clickable { onOpenSeniorChat() }
+                    .padding(18.dp)
+            ) {
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color.White.copy(alpha = 0.25f)
+                        ) {
+                            Text(
+                                text = "💬 SENIOR MENTORSHIP",
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color(0xFFFEF08A)
+                        ) {
+                            Text(
+                                text = "OFFER ₹50",
+                                color = Color(0xFF854D0E),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "1-on-1 Personal Live Chat with Seniors",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Text(
+                        text = "Book real-time slot • Take personal guidance & clear UNLIMITED doubts on Instagram!",
+                        fontSize = 12.sp,
+                        color = Color.White.copy(alpha = 0.9f)
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "₹100  ₹50 Only",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color(0xFFFEF08A)
+                        )
+
+                        Button(
+                            onClick = onOpenSeniorChat,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = "Book Date & Time",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF9F1239)
+                            )
+                        }
+                    }
+                }
+            }
+        }
 
         // Top Header: Welcome Back Greeting & User Avatar with XP Tag
         item {
@@ -381,7 +485,15 @@ fun HomeScreen(
             }
         }
 
+        // KCET Rank vs Marks Dashboard & Predictor (Live Firebase Data)
+        item {
+            RankVsMarksDashboard(
+                rankVsMarksList = rankVsMarksList
+            )
+        }
+
         // Premium Test Series Upgrade Banner
+
         item {
             Box(
                 modifier = Modifier
@@ -542,6 +654,106 @@ fun HomeScreen(
                             color = Color(0xFF64748B)
                         )
                     }
+                }
+            }
+        }
+
+        // Important Dates & Schedule (Stored in Firebase)
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "🗓️ Important Dates & Schedule",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF0F172A)
+                )
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFFEEF2FF),
+                    onClick = { onNavigateTab(BottomTab.COUNSELLING) }
+                ) {
+                    Text(
+                        text = "Full Timeline",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF4F46E5),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        }
+
+        items(importantDates.take(4)) { dateItem ->
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color.White)
+                    .border(
+                        1.dp,
+                        if (dateItem.isHighlighted || dateItem.status == "Active Now") Color(0xFF6366F1) else Color(0xFFE2E8F0),
+                        RoundedCornerShape(20.dp)
+                    )
+                    .padding(16.dp)
+            ) {
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = when (dateItem.status) {
+                                "Active Now" -> Color(0xFFDCFCE7)
+                                "Crucial" -> Color(0xFFFEE2E2)
+                                "Completed" -> Color(0xFFF1F5F9)
+                                else -> Color(0xFFEEF2FF)
+                            }
+                        ) {
+                            Text(
+                                text = dateItem.status.uppercase(),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = when (dateItem.status) {
+                                    "Active Now" -> Color(0xFF15803D)
+                                    "Crucial" -> Color(0xFFB91C1C)
+                                    "Completed" -> Color(0xFF64748B)
+                                    else -> Color(0xFF4338CA)
+                                },
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+
+                        Text(
+                            text = dateItem.dateOrDeadline,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF4F46E5)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = dateItem.eventTitle,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF0F172A)
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Text(
+                        text = dateItem.description,
+                        fontSize = 12.sp,
+                        color = Color(0xFF475569),
+                        lineHeight = 16.sp
+                    )
                 }
             }
         }

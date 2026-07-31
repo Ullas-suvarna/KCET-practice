@@ -28,6 +28,7 @@ import com.example.ui.screens.PracticeScreen
 import com.example.ui.screens.ProfileScreen
 import com.example.ui.screens.ResourcesScreen
 import com.example.ui.screens.ResultScreen
+import com.example.ui.screens.SeniorLiveChatScreen
 import com.example.ui.screens.SplashScreen
 import com.example.ui.theme.KcetPracticeTheme
 import com.example.viewmodel.BottomTab
@@ -55,8 +56,12 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
     val questionsList by viewModel.questionsList.collectAsStateWithLifecycle()
     val announcements by repositoryFlow(viewModel.repository.announcements)
     val resources by repositoryFlow(viewModel.repository.resources)
+    val importantDates by viewModel.importantDates.collectAsStateWithLifecycle()
+    val rankVsMarks by viewModel.rankVsMarks.collectAsStateWithLifecycle()
     val testHistory by viewModel.testResultsHistory.collectAsStateWithLifecycle()
     val showPremiumDialog by viewModel.showPremiumDialog.collectAsStateWithLifecycle()
+    val seniorChatBookings by viewModel.seniorChatBookings.collectAsStateWithLifecycle()
+
 
     // Gamification & Analytics States
     val userPoints by viewModel.userPoints.collectAsStateWithLifecycle()
@@ -127,13 +132,16 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
                                     userProfile = userProfile,
                                     latestResult = latestResult,
                                     announcements = announcements,
+                                    importantDates = importantDates,
+                                    rankVsMarksList = rankVsMarks,
                                     userPoints = userPoints,
                                     userRank = userRank,
                                     badges = userBadges,
                                     onStartFreeTest = { viewModel.startFreeTest() },
                                     onUpgradeClick = { viewModel.triggerPremiumDialog(true) },
                                     onNavigateTab = { tab -> viewModel.selectBottomTab(tab) },
-                                    onOpenAdmin = { viewModel.navigateTo(Screen.ADMIN) }
+                                    onOpenAdmin = { viewModel.navigateTo(Screen.ADMIN) },
+                                    onOpenSeniorChat = { viewModel.navigateTo(Screen.SENIOR_CHAT) }
                                 )
 
                                 BottomTab.PRACTICE -> PracticeScreen(
@@ -146,7 +154,10 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
                                     resources = resources
                                 )
 
-                                BottomTab.COUNSELLING -> CounsellingScreen()
+                                BottomTab.COUNSELLING -> CounsellingScreen(
+                                    importantDates = importantDates,
+                                    onOpenSeniorChat = { viewModel.navigateTo(Screen.SENIOR_CHAT) }
+                                )
 
                                 BottomTab.PROFILE -> ProfileScreen(
                                     userProfile = userProfile,
@@ -157,8 +168,8 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
                                     analyticsSummary = analyticsSummary,
                                     isDarkMode = isDarkMode,
                                     onToggleDarkMode = { viewModel.toggleDarkMode() },
-                                    onUpdateProfile = { name, rank, stream ->
-                                        viewModel.updateUserProfile(name, rank, stream)
+                                    onUpdateProfile = { name, rank, stream, photoUrl ->
+                                        viewModel.updateUserProfile(name, rank, stream, photoUrl)
                                     },
                                     onUpgradeToPremium = { viewModel.upgradeToPremium() },
                                     onLogout = { viewModel.logout() },
@@ -208,6 +219,9 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
                     Box(modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
                         AdminPanelScreen(
                             questions = questionsList,
+                            resourcesList = resources,
+                            importantDates = importantDates,
+                            rankVsMarksList = rankVsMarks,
                             onAddQuestion = { sub, qText, a, b, c, d, opt, exp ->
                                 viewModel.addNewQuestion(sub, qText, a, b, c, d, opt, exp)
                             },
@@ -215,13 +229,41 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
                             onAddAnnouncement = { title, msg, imp ->
                                 viewModel.addAnnouncement(title, msg, imp)
                             },
-                            onAddResource = { title, cat, size, desc ->
-                                viewModel.addResource(title, cat, size, desc)
+                            onAddResource = { title, cat, yrSub, url, size, desc ->
+                                viewModel.addResource(title, cat, yrSub, url, size, desc)
+                            },
+                            onDeleteResource = { id ->
+                                viewModel.deleteResource(id)
+                            },
+                            onAddImportantDate = { title, dateVal, status, desc, cat, high ->
+                                viewModel.addImportantDate(title, dateVal, status, desc, cat, high)
+                            },
+                            onDeleteImportantDate = { id ->
+                                viewModel.deleteImportantDate(id)
+                            },
+                            onAddRankVsMarks = { mRange, rRange, yr, desc, minM, maxM ->
+                                viewModel.addRankVsMarks(mRange, rRange, yr, desc, minM, maxM)
+                            },
+                            onDeleteRankVsMarks = { id ->
+                                viewModel.deleteRankVsMarks(id)
                             },
                             onBack = { viewModel.navigateTo(Screen.MAIN) }
                         )
                     }
                 }
+
+                Screen.SENIOR_CHAT -> {
+                    Box(modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
+                        SeniorLiveChatScreen(
+                            bookings = seniorChatBookings,
+                            onBookSession = { date, time ->
+                                viewModel.bookSeniorChatSession(date, time)
+                            },
+                            onBack = { viewModel.navigateTo(Screen.MAIN) }
+                        )
+                    }
+                }
+
             }
 
             if (showPremiumDialog) {

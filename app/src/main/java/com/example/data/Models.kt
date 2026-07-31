@@ -25,7 +25,20 @@ data class Question(
     val optionC: String,
     val optionD: String,
     val correctOption: Option,
-    val explanation: String
+    val explanation: String,
+    val testSetId: String = "default",
+    val isPremium: Boolean = false
+)
+
+data class TestSeriesSet(
+    val id: String = "",
+    val title: String = "",
+    val category: String = "Full Mock Tests", // Full Mock Tests, Previous Year Papers, Chapter-wise Tests, Daily Practice
+    val questionCount: Int = 20,
+    val durationMins: Int = 20,
+    val isPremium: Boolean = true,
+    val description: String = "",
+    val createdDate: String = "2026"
 )
 
 data class UserAnswer(
@@ -84,6 +97,16 @@ data class Announcement(
     val isImportant: Boolean = false
 )
 
+data class ImportantDateItem(
+    val id: String = "",
+    val eventTitle: String = "",
+    val dateOrDeadline: String = "",
+    val status: String = "Upcoming", // Completed, Active Now, Upcoming, Crucial
+    val description: String = "",
+    val category: String = "Exam", // Exam, Counselling, Application, Results, Admit Card
+    val isHighlighted: Boolean = false
+)
+
 data class UserProfile(
     val uid: String,
     val name: String,
@@ -94,3 +117,26 @@ data class UserProfile(
     val targetStream: String = "Engineering (B.E / B.Tech)",
     val registrationDate: String = "2026"
 )
+
+data class RankVsMarksItem(
+    val id: String = "",
+    val marksRange: String = "",
+    val expectedRankRange: String = "",
+    val year: String = "2025",
+    val description: String = "",
+    val minMarks: Int = 0,
+    val maxMarks: Int = 180
+)
+
+data class SeniorChatBooking(
+    val bookingId: String,
+    val selectedDate: String,
+    val selectedTime: String,
+    val mentorName: String = "Senior KCET Mentor (@ULLAS_U_SUVARNA)",
+    val instagramHandle: String = "@ULLAS_U_SUVARNA",
+    val supportEmail: String = "kcetpracticepro9@gmail.com",
+    val amountPaid: Int = 50,
+    val bookedAtTimestamp: Long = System.currentTimeMillis(),
+    val status: String = "Confirmed"
+)
+

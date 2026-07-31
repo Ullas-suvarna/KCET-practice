@@ -29,8 +29,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+import com.example.data.SeniorChatBooking
+
 enum class Screen {
-    SPLASH, ONBOARDING, AUTH, MAIN, EXAM, RESULT, ADMIN
+    SPLASH, ONBOARDING, AUTH, MAIN, EXAM, RESULT, ADMIN, SENIOR_CHAT
 }
 
 enum class BottomTab {
@@ -48,6 +50,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _selectedTab = MutableStateFlow(BottomTab.HOME)
     val selectedTab: StateFlow<BottomTab> = _selectedTab.asStateFlow()
+
+    // Senior Mentorship Live Chat Bookings
+    private val _seniorChatBookings = MutableStateFlow<List<SeniorChatBooking>>(emptyList())
+    val seniorChatBookings: StateFlow<List<SeniorChatBooking>> = _seniorChatBookings.asStateFlow()
+
+    fun bookSeniorChatSession(date: String, time: String) {
+        val newBooking = SeniorChatBooking(
+            bookingId = "KCET-LIVE-${(1000..9999).random()}",
+            selectedDate = date,
+            selectedTime = time,
+            amountPaid = 50
+        )
+        _seniorChatBookings.value = _seniorChatBookings.value + newBooking
+    }
 
     // Dark Mode
     private val _isDarkMode = MutableStateFlow(true)
@@ -91,11 +107,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _currentScreen.value = Screen.AUTH
     }
 
-    fun updateUserProfile(name: String, targetRank: String, targetStream: String) {
+    fun updateUserProfile(name: String, targetRank: String, targetStream: String, photoUrl: String? = null) {
         _userProfile.value = _userProfile.value.copy(
             name = name,
             kcetTargetRank = targetRank,
-            targetStream = targetStream
+            targetStream = targetStream,
+            photoUrl = photoUrl
         )
         viewModelScope.launch {
             FirebaseService.saveUserProfile(_userProfile.value)
@@ -121,6 +138,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
     )
+
+    // Test Series Sets State from Firestore
+    val testSeriesSets: StateFlow<List<com.example.data.TestSeriesSet>> = repository.testSeriesSets.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    // Important Dates State from Firestore
+    val importantDates: StateFlow<List<com.example.data.ImportantDateItem>> = repository.importantDates.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    // Rank vs Marks State from Firestore
+    val rankVsMarks: StateFlow<List<com.example.data.RankVsMarksItem>> = repository.rankVsMarks.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
 
     // Test History State
     val testResultsHistory: StateFlow<List<TestResultEntity>> = repository.allResults.stateIn(
@@ -477,7 +516,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         optionC: String,
         optionD: String,
         correctOption: Option,
-        explanation: String
+        explanation: String,
+        testSetId: String = "default",
+        isPremium: Boolean = false
     ) {
         val nextId = (questionsList.value.maxOfOrNull { it.id } ?: 0) + 1
         val newQ = Question(
@@ -489,13 +530,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             optionC = optionC,
             optionD = optionD,
             correctOption = correctOption,
-            explanation = explanation
+            explanation = explanation,
+            testSetId = testSetId,
+            isPremium = isPremium
         )
         repository.addQuestion(newQ)
     }
 
     fun deleteQuestion(questionId: Int) {
         repository.deleteQuestion(questionId)
+    }
+
+    fun addTestSeriesSet(
+        title: String,
+        category: String,
+        questionCount: Int,
+        durationMins: Int,
+        isPremium: Boolean,
+        description: String
+    ) {
+        val item = com.example.data.TestSeriesSet(
+            id = "ts_${System.currentTimeMillis()}",
+            title = title,
+            category = category,
+            questionCount = questionCount,
+            durationMins = durationMins,
+            isPremium = isPremium,
+            description = description,
+            createdDate = "2026"
+        )
+        repository.addTestSeriesSet(item)
+    }
+
+    fun deleteTestSeriesSet(id: String) {
+        repository.deleteTestSeriesSet(id)
     }
 
     fun addAnnouncement(title: String, message: String, isImportant: Boolean) {
@@ -509,16 +577,79 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         repository.addAnnouncement(ann)
     }
 
-    fun addResource(title: String, category: String, size: String, desc: String) {
+    fun addResource(
+        title: String,
+        category: String,
+        yearOrSubject: String,
+        downloadUrl: String,
+        fileSize: String,
+        description: String
+    ) {
+        val validUrl = if (downloadUrl.isBlank()) "https://cetonline.karnataka.gov.in/kea/kcet2026.pdf" else downloadUrl
+        val validSize = if (fileSize.isBlank()) "1.8 MB" else fileSize
+        val validYrSub = if (yearOrSubject.isBlank()) "KCET 2026" else yearOrSubject
         val res = ResourceItem(
             id = "res_${System.currentTimeMillis()}",
             title = title,
             category = category,
-            fileSize = size,
-            yearOrSubject = "2026",
-            downloadUrl = "https://example.com/kcet_notes.pdf",
-            description = desc
+            fileSize = validSize,
+            yearOrSubject = validYrSub,
+            downloadUrl = validUrl,
+            description = description
         )
         repository.addResource(res)
     }
+
+    fun deleteResource(id: String) {
+        repository.deleteResource(id)
+    }
+
+    fun addImportantDate(
+        eventTitle: String,
+        dateOrDeadline: String,
+        status: String,
+        description: String,
+        category: String,
+        isHighlighted: Boolean
+    ) {
+        val item = com.example.data.ImportantDateItem(
+            id = "date_${System.currentTimeMillis()}",
+            eventTitle = eventTitle,
+            dateOrDeadline = dateOrDeadline,
+            status = status,
+            description = description,
+            category = category,
+            isHighlighted = isHighlighted
+        )
+        repository.addImportantDate(item)
+    }
+
+    fun deleteImportantDate(id: String) {
+        repository.deleteImportantDate(id)
+    }
+
+    fun addRankVsMarks(
+        marksRange: String,
+        expectedRankRange: String,
+        year: String,
+        description: String,
+        minMarks: Int,
+        maxMarks: Int
+    ) {
+        val item = com.example.data.RankVsMarksItem(
+            id = "rank_${System.currentTimeMillis()}",
+            marksRange = marksRange,
+            expectedRankRange = expectedRankRange,
+            year = year,
+            description = description,
+            minMarks = minMarks,
+            maxMarks = maxMarks
+        )
+        repository.addRankVsMarks(item)
+    }
+
+    fun deleteRankVsMarks(id: String) {
+        repository.deleteRankVsMarks(id)
+    }
 }
+

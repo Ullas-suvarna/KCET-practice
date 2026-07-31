@@ -46,23 +46,18 @@ data class TestCardItem(
     val isFree: Boolean = false
 )
 
+import com.example.data.TestSeriesSet
+
 @Composable
 fun PracticeScreen(
     isPremiumUser: Boolean,
+    testSeriesSets: List<TestSeriesSet> = emptyList(),
     onStartFreeTest: () -> Unit,
     onLockedFeatureClick: () -> Unit
 ) {
-    val testCards = listOf(
-        TestCardItem("t1", "KCET Grand Sample CBT Test 1", "Free Mock Test", 20, 20, isFree = true),
-        TestCardItem("t2", "KCET Full Mock Test 2 (PCM)", "Full Mock Tests", 180, 180),
-        TestCardItem("t3", "KCET Full Mock Test 3 (PCB)", "Full Mock Tests", 180, 180),
-        TestCardItem("t4", "KCET 2025 Official Solved Paper", "Previous Year Papers", 180, 180),
-        TestCardItem("t5", "KCET 2024 Official Solved Paper", "Previous Year Papers", 180, 180),
-        TestCardItem("t6", "Physics: Electrostatics & Current Electricity", "Chapter-wise Tests", 30, 30),
-        TestCardItem("t7", "Chemistry: Organic Named Reactions", "Chapter-wise Tests", 30, 30),
-        TestCardItem("t8", "Mathematics: Matrices & Calculus", "Chapter-wise Tests", 30, 30),
-        TestCardItem("t9", "Daily Practice Questions (DPP Series 12)", "Daily Practice", 15, 15)
-    )
+    val displaySets = if (testSeriesSets.isNotEmpty()) testSeriesSets else com.example.data.SampleData.sampleTestSeriesSets
+    val freeSets = displaySets.filter { !it.isPremium }
+    val premiumSets = displaySets.filter { it.isPremium }
 
     LazyColumn(
         modifier = Modifier
@@ -96,76 +91,78 @@ fun PracticeScreen(
         }
 
         // Free Test Section Header
-        item {
-            Text(
-                text = "🎁 Free Sample Test",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF10B981)
-            )
-        }
+        if (freeSets.isNotEmpty()) {
+            item {
+                Text(
+                    text = "🎁 Free Unlocked Sample Tests (${freeSets.size})",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF10B981)
+                )
+            }
 
-        // Free Test Card
-        item {
-            GlassCard(
-                modifier = Modifier.fillMaxWidth(),
-                cornerRadius = 24.dp
-            ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = Color(0xFF10B981)
+            items(freeSets) { test ->
+                GlassCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    cornerRadius = 24.dp
+                ) {
+                    Column(modifier = Modifier.padding(20.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = Color(0xFF10B981)
+                            ) {
+                                Text(
+                                    text = "FREE UNLOCKED",
+                                    fontSize = 10.sp,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                )
+                            }
+
                             Text(
-                                text = "FREE UNLOCKED",
-                                fontSize = 10.sp,
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                text = "${test.questionCount} Questions • ${test.durationMins} Mins",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF64748B)
                             )
                         }
 
+                        Spacer(modifier = Modifier.height(12.dp))
+
                         Text(
-                            text = "20 Questions • 20 Mins",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFF64748B)
+                            text = test.title,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0F172A)
                         )
-                    }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                        if (test.description.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = test.description,
+                                fontSize = 13.sp,
+                                color = Color(0xFF64748B)
+                            )
+                        }
 
-                    Text(
-                        text = "KCET Grand Sample CBT Test 1",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF0F172A)
-                    )
+                        Spacer(modifier = Modifier.height(18.dp))
 
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    Text(
-                        text = "Physics, Chemistry & Mathematics combined entrance paper with full answer key.",
-                        fontSize = 13.sp,
-                        color = Color(0xFF64748B)
-                    )
-
-                    Spacer(modifier = Modifier.height(18.dp))
-
-                    Button(
-                        onClick = onStartFreeTest,
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5)),
-                        modifier = Modifier.fillMaxWidth().height(48.dp)
-                    ) {
-                        Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(text = "Start Test Now", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Button(
+                            onClick = onStartFreeTest,
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5)),
+                            modifier = Modifier.fillMaxWidth().height(48.dp)
+                        ) {
+                            Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(text = "Start Test Now", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        }
                     }
                 }
             }
@@ -179,7 +176,7 @@ fun PracticeScreen(
                 Icon(imageVector = Icons.Default.Lock, contentDescription = null, tint = Color(0xFF9333EA), modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "🔒 Premium Mock Tests & PYQs",
+                    text = "🔒 Premium Test Series & Mock Sets (${premiumSets.size})",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF0F172A)
@@ -187,8 +184,8 @@ fun PracticeScreen(
             }
         }
 
-        // Cards list
-        items(testCards.filter { !it.isFree }) { test ->
+        // Cards list for Premium Sets
+        items(premiumSets) { test ->
             val canAccess = isPremiumUser
 
             Box(

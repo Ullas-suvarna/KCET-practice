@@ -31,7 +31,7 @@ object FirebaseService {
     }
 
     // Helper for async Firebase Tasks
-    private suspend fun <T> com.google.android.gms.tasks.Task<T>.awaitResult(): Result<T> =
+    suspend fun <T> com.google.android.gms.tasks.Task<T>.awaitResult(): Result<T> =
         suspendCancellableCoroutine { continuation ->
             addOnSuccessListener { result ->
                 if (continuation.isActive) continuation.resume(Result.success(result))
@@ -41,9 +41,142 @@ object FirebaseService {
             }
         }
 
+    suspend fun getUserAccountRecord(identifier: String): Map<String, String>? {
+        return try {
+            val cleanId = normalizeIdentifier(identifier)
+            val docSnap = firestore.collection("user_accounts").document(cleanId).get().awaitResult().getOrNull()
+            if (docSnap != null && docSnap.exists()) {
+                mapOf(
+                    "password" to (docSnap.getString("password") ?: ""),
+                    "name" to (docSnap.getString("name") ?: ""),
+                    "email" to (docSnap.getString("email") ?: ""),
+                    "phone" to (docSnap.getString("phone") ?: ""),
+                    "authEmail" to (docSnap.getString("authEmail") ?: docSnap.getString("email") ?: "")
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun isValidIndianPhoneNumber(phone: String): Boolean {
+        val clean = phone.trim().replace(" ", "").replace("-", "")
+        val digitsOnly = when {
+            clean.startsWith("+91") -> clean.substring(3)
+            clean.startsWith("91") && clean.length == 12 -> clean.substring(2)
+            clean.startsWith("0") && clean.length == 11 -> clean.substring(1)
+            else -> clean
+        }
+        return digitsOnly.length == 10 && digitsOnly.all { it.isDigit() } &&
+                (digitsOnly.startsWith("6") || digitsOnly.startsWith("7") || digitsOnly.startsWith("8") || digitsOnly.startsWith("9"))
+    }
+
+    fun normalizeIndianPhoneNumber(phone: String): String {
+        val clean = phone.trim().replace(" ", "").replace("-", "")
+        val digitsOnly = when {
+            clean.startsWith("+91") -> clean.substring(3)
+            clean.startsWith("91") && clean.length == 12 -> clean.substring(2)
+            clean.startsWith("0") && clean.length == 11 -> clean.substring(1)
+            else -> clean
+        }
+        return if (digitsOnly.length == 10) digitsOnly else clean
+    }
+
+    fun normalizeIdentifier(identifier: String): String {
+        val trimmed = identifier.lowercase().trim()
+        if (trimmed.contains("@")) return trimmed
+        return normalizeIndianPhoneNumber(trimmed)
+    }
+
     // -------------------------------------------------------------
     // 1. USERS COLLECTION
     // -------------------------------------------------------------
+    suspend fun saveUserRecord(
+        uid: String,
+        email: String?,
+        phone: String?,
+        password: String,
+        name: String
+    ): Boolean {
+        val cleanEmail = email?.lowercase()?.trim() ?: ""
+        val cleanPhone = phone?.trim()?.replace(" ", "")?.replace("-", "") ?: ""
+
+        val derivedAuthEmail = if (cleanEmail.contains("@")) {
+            cleanEmail
+        } else if (cleanPhone.isNotBlank()) {
+            "phone_${cleanPhone.replace("+", "")}@kcetapp.com"
+        } else {
+            "user_${System.currentTimeMillis()}@kcetapp.com"
+        }
+
+        val userMap = mutableMapOf<String, Any>(
+            "uid" to uid,
+            "name" to name,
+            "email" to cleanEmail,
+            "phone" to cleanPhone,
+            "authEmail" to derivedAuthEmail,
+            "password" to password.trim(),
+            "isPremium" to false,
+            "kcetTargetRank" to "Under 1000",
+            "targetStream" to "Engineering (B.E / B.Tech)",
+            "registrationDate" to "2026"
+        )
+
+        val res = firestore.collection("users").document(uid).set(userMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+
+        // Index by email if provided
+        if (cleanEmail.isNotBlank()) {
+            firestore.collection("user_accounts").document(cleanEmail).set(userMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+        }
+
+        // Index by phone if provided
+        if (cleanPhone.isNotBlank()) {
+            firestore.collection("user_accounts").document(cleanPhone).set(userMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+            // If phone has 10 digits without +91, also index with +91 and vice versa for easy login
+            if (cleanPhone.length == 10) {
+                firestore.collection("user_accounts").document("+91$cleanPhone").set(userMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+            } else if (cleanPhone.startsWith("+91") && cleanPhone.length == 13) {
+                firestore.collection("user_accounts").document(cleanPhone.substring(3)).set(userMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+            }
+        }
+
+        return res.isSuccess
+    }
+
+    suspend fun updateUserPasswordInFirestore(identifier: String, newPass: String) {
+        try {
+            val cleanId = normalizeIdentifier(identifier)
+            val updateMap = mapOf("password" to newPass.trim())
+
+            // Fetch record to get all linked identifiers
+            val record = getUserAccountRecord(cleanId)
+
+            firestore.collection("user_accounts").document(cleanId).set(updateMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+
+            if (record != null) {
+                val email = record["email"] ?: ""
+                val phone = record["phone"] ?: ""
+                if (email.isNotBlank()) {
+                    firestore.collection("user_accounts").document(email.lowercase().trim()).set(updateMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+                }
+                if (phone.isNotBlank()) {
+                    val normPhone = normalizeIndianPhoneNumber(phone)
+                    firestore.collection("user_accounts").document(normPhone).set(updateMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+                    firestore.collection("user_accounts").document("+91$normPhone").set(updateMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+                }
+            }
+
+            val userUid = auth.currentUser?.uid
+            if (!userUid.isNullOrBlank()) {
+                firestore.collection("users").document(userUid).set(updateMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error updating password in firestore: ${e.message}")
+        }
+    }
+
     suspend fun saveUserProfile(profile: UserProfile): Boolean {
         val uid = auth.currentUser?.uid ?: profile.uid.ifBlank { "guest" }
         val userMap = mapOf(
@@ -110,6 +243,8 @@ object FirebaseService {
                     val correctOptStr = doc.getString("correctOption") ?: "A"
                     val correctOption = try { Option.valueOf(correctOptStr) } catch (_: Exception) { Option.A }
                     val explanation = doc.getString("explanation") ?: ""
+                    val testSetId = doc.getString("testSetId") ?: "default"
+                    val isPremium = doc.getBoolean("isPremium") ?: false
 
                     Question(
                         id = id,
@@ -121,7 +256,9 @@ object FirebaseService {
                         optionC = optionC,
                         optionD = optionD,
                         correctOption = correctOption,
-                        explanation = explanation
+                        explanation = explanation,
+                        testSetId = testSetId,
+                        isPremium = isPremium
                     )
                 } catch (e: Exception) {
                     null
@@ -143,13 +280,60 @@ object FirebaseService {
             "optionC" to question.optionC,
             "optionD" to question.optionD,
             "correctOption" to question.correctOption.name,
-            "explanation" to question.explanation
+            "explanation" to question.explanation,
+            "testSetId" to question.testSetId,
+            "isPremium" to question.isPremium
         )
         firestore.collection("questions").document(question.id.toString()).set(docMap).awaitResult()
     }
 
     suspend fun deleteQuestion(questionId: Int) {
         firestore.collection("questions").document(questionId.toString()).delete().awaitResult()
+    }
+
+    // -------------------------------------------------------------
+    // TEST SERIES & QUESTION SETS COLLECTION
+    // -------------------------------------------------------------
+    fun observeTestSeriesSets(): Flow<List<TestSeriesSet>> = callbackFlow {
+        val query = firestore.collection("test_series_sets")
+        val listener = query.addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null || snapshot.isEmpty) {
+                trySend(SampleData.sampleTestSeriesSets)
+                return@addSnapshotListener
+            }
+            val items = snapshot.documents.mapNotNull { doc ->
+                TestSeriesSet(
+                    id = doc.getString("id") ?: doc.id,
+                    title = doc.getString("title") ?: "",
+                    category = doc.getString("category") ?: "Full Mock Tests",
+                    questionCount = (doc.getLong("questionCount") ?: 20L).toInt(),
+                    durationMins = (doc.getLong("durationMins") ?: 20L).toInt(),
+                    isPremium = doc.getBoolean("isPremium") ?: true,
+                    description = doc.getString("description") ?: "",
+                    createdDate = doc.getString("createdDate") ?: "2026"
+                )
+            }
+            trySend(if (items.isNotEmpty()) items else SampleData.sampleTestSeriesSets)
+        }
+        awaitClose { listener.remove() }
+    }
+
+    suspend fun saveTestSeriesSet(item: TestSeriesSet) {
+        val docMap = mapOf(
+            "id" to item.id,
+            "title" to item.title,
+            "category" to item.category,
+            "questionCount" to item.questionCount,
+            "durationMins" to item.durationMins,
+            "isPremium" to item.isPremium,
+            "description" to item.description,
+            "createdDate" to item.createdDate
+        )
+        firestore.collection("test_series_sets").document(item.id).set(docMap).awaitResult()
+    }
+
+    suspend fun deleteTestSeriesSet(id: String) {
+        firestore.collection("test_series_sets").document(id).delete().awaitResult()
     }
 
     suspend fun seedSampleQuestionsIfEmpty() {
@@ -160,8 +344,15 @@ object FirebaseService {
                     saveQuestion(q)
                 }
             }
+
+            val tsQuery = firestore.collection("test_series_sets").get().awaitResult()
+            if (tsQuery.isSuccess && (tsQuery.getOrNull()?.isEmpty == true)) {
+                SampleData.sampleTestSeriesSets.forEach { ts ->
+                    saveTestSeriesSet(ts)
+                }
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "Error seeding sample questions: ${e.message}")
+            Log.e(TAG, "Error seeding sample questions or test series sets: ${e.message}")
         }
     }
 
@@ -363,6 +554,10 @@ object FirebaseService {
         firestore.collection("resources").document(resource.id).set(docMap).awaitResult()
     }
 
+    suspend fun deleteResource(id: String) {
+        firestore.collection("resources").document(id).delete().awaitResult()
+    }
+
     fun observeAnnouncements(): Flow<List<Announcement>> = callbackFlow {
         val query = firestore.collection("announcements")
         val listener = query.addSnapshotListener { snapshot, error ->
@@ -395,6 +590,92 @@ object FirebaseService {
         firestore.collection("announcements").document(announcement.id).set(docMap).awaitResult()
     }
 
+    // -------------------------------------------------------------
+    // 7. IMPORTANT DATES & SCHEDULE COLLECTION
+    // -------------------------------------------------------------
+    fun observeImportantDates(): Flow<List<ImportantDateItem>> = callbackFlow {
+        val query = firestore.collection("important_dates")
+        val listener = query.addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null || snapshot.isEmpty) {
+                trySend(SampleData.sampleImportantDates)
+                return@addSnapshotListener
+            }
+            val items = snapshot.documents.mapNotNull { doc ->
+                ImportantDateItem(
+                    id = doc.getString("id") ?: doc.id,
+                    eventTitle = doc.getString("eventTitle") ?: "",
+                    dateOrDeadline = doc.getString("dateOrDeadline") ?: "",
+                    status = doc.getString("status") ?: "Upcoming",
+                    description = doc.getString("description") ?: "",
+                    category = doc.getString("category") ?: "Exam",
+                    isHighlighted = doc.getBoolean("isHighlighted") ?: false
+                )
+            }
+            trySend(if (items.isNotEmpty()) items else SampleData.sampleImportantDates)
+        }
+        awaitClose { listener.remove() }
+    }
+
+    suspend fun saveImportantDate(item: ImportantDateItem) {
+        val docMap = mapOf(
+            "id" to item.id,
+            "eventTitle" to item.eventTitle,
+            "dateOrDeadline" to item.dateOrDeadline,
+            "status" to item.status,
+            "description" to item.description,
+            "category" to item.category,
+            "isHighlighted" to item.isHighlighted
+        )
+        firestore.collection("important_dates").document(item.id).set(docMap).awaitResult()
+    }
+
+    suspend fun deleteImportantDate(id: String) {
+        firestore.collection("important_dates").document(id).delete().awaitResult()
+    }
+
+    // -------------------------------------------------------------
+    // 8. RANK VS MARKS COLLECTION (Stored in Firebase)
+    // -------------------------------------------------------------
+    fun observeRankVsMarks(): Flow<List<RankVsMarksItem>> = callbackFlow {
+        val query = firestore.collection("rank_vs_marks").orderBy("minMarks", Query.Direction.DESCENDING)
+        val listener = query.addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null || snapshot.isEmpty) {
+                trySend(SampleData.sampleRankVsMarks)
+                return@addSnapshotListener
+            }
+            val items = snapshot.documents.mapNotNull { doc ->
+                RankVsMarksItem(
+                    id = doc.getString("id") ?: doc.id,
+                    marksRange = doc.getString("marksRange") ?: "",
+                    expectedRankRange = doc.getString("expectedRankRange") ?: "",
+                    year = doc.getString("year") ?: "2025",
+                    description = doc.getString("description") ?: "",
+                    minMarks = (doc.getLong("minMarks") ?: 0L).toInt(),
+                    maxMarks = (doc.getLong("maxMarks") ?: 180L).toInt()
+                )
+            }
+            trySend(if (items.isNotEmpty()) items else SampleData.sampleRankVsMarks)
+        }
+        awaitClose { listener.remove() }
+    }
+
+    suspend fun saveRankVsMarks(item: RankVsMarksItem) {
+        val docMap = mapOf(
+            "id" to item.id,
+            "marksRange" to item.marksRange,
+            "expectedRankRange" to item.expectedRankRange,
+            "year" to item.year,
+            "description" to item.description,
+            "minMarks" to item.minMarks,
+            "maxMarks" to item.maxMarks
+        )
+        firestore.collection("rank_vs_marks").document(item.id).set(docMap).awaitResult()
+    }
+
+    suspend fun deleteRankVsMarks(id: String) {
+        firestore.collection("rank_vs_marks").document(id).delete().awaitResult()
+    }
+
     suspend fun seedResourcesAndAnnouncementsIfEmpty() {
         try {
             val resQuery = firestore.collection("resources").get().awaitResult()
@@ -406,8 +687,19 @@ object FirebaseService {
             if (annQuery.isSuccess && (annQuery.getOrNull()?.isEmpty == true)) {
                 SampleData.sampleAnnouncements.forEach { saveAnnouncement(it) }
             }
+
+            val datesQuery = firestore.collection("important_dates").get().awaitResult()
+            if (datesQuery.isSuccess && (datesQuery.getOrNull()?.isEmpty == true)) {
+                SampleData.sampleImportantDates.forEach { saveImportantDate(it) }
+            }
+
+            val rankQuery = firestore.collection("rank_vs_marks").get().awaitResult()
+            if (rankQuery.isSuccess && (rankQuery.getOrNull()?.isEmpty == true)) {
+                SampleData.sampleRankVsMarks.forEach { saveRankVsMarks(it) }
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "Error seeding resources/announcements: ${e.message}")
+            Log.e(TAG, "Error seeding resources/announcements/important dates/rank vs marks: ${e.message}")
         }
     }
 }
+

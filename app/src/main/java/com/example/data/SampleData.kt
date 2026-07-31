@@ -261,7 +261,7 @@ object SampleData {
             category = "Syllabus",
             fileSize = "2.4 MB",
             yearOrSubject = "All Subjects",
-            downloadUrl = "https://example.com/kcet_syllabus.pdf",
+            downloadUrl = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
             description = "Complete topic-wise weightage for Physics, Chemistry, Mathematics & Biology as prescribed by KEA."
         ),
         ResourceItem(
@@ -270,7 +270,7 @@ object SampleData {
             category = "PYQ Papers",
             fileSize = "4.1 MB",
             yearOrSubject = "2025 Paper",
-            downloadUrl = "https://example.com/kcet_2025.pdf",
+            downloadUrl = "https://pdfobject.com/pdf/sample.pdf",
             description = "Official KEA question paper with step-by-step verified answer keys and shortcuts."
         ),
         ResourceItem(
@@ -279,7 +279,7 @@ object SampleData {
             category = "Formula Sheets",
             fileSize = "1.8 MB",
             yearOrSubject = "Physics",
-            downloadUrl = "https://example.com/physics_formulas.pdf",
+            downloadUrl = "https://www.orimi.com/pdf-test.pdf",
             description = "All essential formulas from Electrostatics, Mechanics, Optics, Modern Physics & Thermodynamics."
         ),
         ResourceItem(
@@ -288,7 +288,7 @@ object SampleData {
             category = "Formula Sheets",
             fileSize = "3.2 MB",
             yearOrSubject = "Mathematics",
-            downloadUrl = "https://example.com/maths_shortcuts.pdf",
+            downloadUrl = "https://raw.githubusercontent.com/mozilla/pdf.js/master/web/compressed.tracemonkey-pldi-09.pdf",
             description = "Integration tricks, Matrix determinants properties, and 3D Geometry distance shortcuts."
         ),
         ResourceItem(
@@ -297,7 +297,7 @@ object SampleData {
             category = "PDF Notes",
             fileSize = "2.9 MB",
             yearOrSubject = "Chemistry",
-            downloadUrl = "https://example.com/chemistry_reactions.pdf",
+            downloadUrl = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
             description = "Comprehensive summary of Aldol, Cannizzaro, Reimer-Tiemann, and Kolbe's reactions."
         )
     )
@@ -399,4 +399,106 @@ object SampleData {
         Pair("What happens if I don't select any Choice after Round 1?", "If you do not choose Choice 1, 2, 3, or 4 within the KEA deadline, your allocated seat will be automatically cancelled and you will be removed from subsequent rounds."),
         Pair("How is KCET Rank calculated?", "KCET Rank for Engineering is calculated by giving 50% weightage to 2nd PUC Physics, Chemistry, and Mathematics marks, and 50% weightage to KCET Entrance exam score.")
     )
+
+    val sampleImportantDates = listOf(
+        ImportantDateItem(
+            id = "d1",
+            eventTitle = "KCET 2026 Online Application Form",
+            dateOrDeadline = "Jan 10, 2026 - Feb 28, 2026",
+            status = "Completed",
+            description = "Online registration & document upload on official KEA portal cetonline.karnataka.gov.in",
+            category = "Application",
+            isHighlighted = false
+        ),
+        ImportantDateItem(
+            id = "d2",
+            eventTitle = "KEA Hall Ticket / Admit Card Download",
+            dateOrDeadline = "April 05, 2026",
+            status = "Completed",
+            description = "Download official KCET admission ticket with test center details & guidelines.",
+            category = "Admit Card",
+            isHighlighted = false
+        ),
+        ImportantDateItem(
+            id = "d3",
+            eventTitle = "KCET 2026 Examination (Physics, Chem, Math, Bio)",
+            dateOrDeadline = "April 18 - April 19, 2026",
+            status = "Completed",
+            description = "CBT / OMR State Entrance Examination across 500+ test centers in Karnataka.",
+            category = "Exam",
+            isHighlighted = true
+        ),
+        ImportantDateItem(
+            id = "d4",
+            eventTitle = "Provisional Answer Key Release & Objections",
+            dateOrDeadline = "April 25 - April 28, 2026",
+            status = "Completed",
+            description = "Verify official answer keys and raise challenges with supporting documents.",
+            category = "Results",
+            isHighlighted = false
+        ),
+        ImportantDateItem(
+            id = "d5",
+            eventTitle = "KCET Ranks & Scorecard Declaration",
+            dateOrDeadline = "May 20, 2026",
+            status = "Completed",
+            description = "Publication of Engineering, Agri, Vet, and Pharmacy merit ranks.",
+            category = "Results",
+            isHighlighted = true
+        ),
+        ImportantDateItem(
+            id = "d6",
+            eventTitle = "KEA Document Verification & Secret Key Issuance",
+            dateOrDeadline = "June 05 - June 20, 2026",
+            status = "Active Now",
+            description = "Physical/Online document verification at nodal centers & secret key generation.",
+            category = "Counselling",
+            isHighlighted = true
+        ),
+        ImportantDateItem(
+            id = "d7",
+            eventTitle = "Mock Option Entry & Cutoff Publication",
+            dateOrDeadline = "July 02 - July 08, 2026",
+            status = "Upcoming",
+            description = "Trial option entry round to evaluate seat allotment chances based on previous cutoffs.",
+            category = "Counselling",
+            isHighlighted = true
+        ),
+        ImportantDateItem(
+            id = "d8",
+            eventTitle = "Round 1 Real Option Entry & Seat Allotment",
+            dateOrDeadline = "July 12 - July 20, 2026",
+            status = "Upcoming",
+            description = "Locking college/branch preferences for official Round 1 seat allotment.",
+            category = "Counselling",
+            isHighlighted = true
+        )
+    )
+
+    val sampleRankVsMarks = listOf(
+        RankVsMarksItem("r1", "170 - 180", "1 - 50", "2025", "Top Tier CS/IS at RVCE, BMSCE, MSRIT & PES University", 170, 180),
+        RankVsMarksItem("r2", "160 - 169", "51 - 250", "2025", "CS, AI/ML, ECE in top 5 Bangalore engineering colleges", 160, 169),
+        RankVsMarksItem("r3", "150 - 159", "251 - 800", "2025", "Circuit branches in top government & premier private colleges", 150, 159),
+        RankVsMarksItem("r4", "140 - 149", "801 - 2,000", "2025", "Computer Science / IT branches in top tier 1-2 institutes", 140, 149),
+        RankVsMarksItem("r5", "130 - 139", "2,001 - 4,500", "2025", "Good core & IT branches in high-demand Bangalore/Mysore colleges", 130, 139),
+        RankVsMarksItem("r6", "120 - 129", "4,501 - 8,000", "2025", "ECE, EEE, Mechanical & AI branches across top 15 colleges", 120, 129),
+        RankVsMarksItem("r7", "110 - 119", "8,001 - 13,000", "2025", "Engineering seats in reputed VTU affiliated colleges", 110, 119),
+        RankVsMarksItem("r8", "100 - 109", "13,001 - 20,000", "2025", "Assured admission in good private engineering institutions", 100, 109),
+        RankVsMarksItem("r9", "90 - 99", "20,001 - 35,000", "2025", "Multiple branch choices available across Karnataka", 90, 99),
+        RankVsMarksItem("r10", "80 - 89", "35,001 - 55,000", "2025", "General merit seats in standard engineering institutes", 80, 89),
+        RankVsMarksItem("r11", "60 - 79", "55,001 - 90,000", "2025", "Seats available in civil, mech, chemical & regional colleges", 60, 79)
+    )
+
+    val sampleTestSeriesSets = listOf(
+        TestSeriesSet("ts_1", "KCET Grand Sample CBT Test 1", "Free Mock Test", 20, 20, isPremium = false, description = "Physics, Chemistry & Mathematics combined entrance paper with full answer key."),
+        TestSeriesSet("ts_2", "KCET Full Mock Test 2 (PCM)", "Full Mock Tests", 180, 180, isPremium = true, description = "Comprehensive 180-question full syllabus mock exam for PCM."),
+        TestSeriesSet("ts_3", "KCET Full Mock Test 3 (PCB)", "Full Mock Tests", 180, 180, isPremium = true, description = "180-question mock exam focusing on Physics, Chemistry & Biology."),
+        TestSeriesSet("ts_4", "KCET 2025 Official Solved Paper", "Previous Year Papers", 180, 180, isPremium = true, description = "Official previous year paper with detailed step-by-step solutions."),
+        TestSeriesSet("ts_5", "KCET 2024 Official Solved Paper", "Previous Year Papers", 180, 180, isPremium = true, description = "Complete solved question bank from KCET 2024 exam."),
+        TestSeriesSet("ts_6", "Physics: Electrostatics & Current Electricity", "Chapter-wise Tests", 30, 30, isPremium = true, description = "High yield targeted questions for Class 12 Physics topics."),
+        TestSeriesSet("ts_7", "Chemistry: Organic Named Reactions", "Chapter-wise Tests", 30, 30, isPremium = true, description = "Master named reactions and mechanisms for KCET."),
+        TestSeriesSet("ts_8", "Mathematics: Matrices & Calculus", "Chapter-wise Tests", 30, 30, isPremium = true, description = "Focused practice set for calculus, limits, and matrix algebra."),
+        TestSeriesSet("ts_9", "Daily Practice Questions (DPP Series 12)", "Daily Practice", 15, 15, isPremium = true, description = "Quick daily 15-minute test set for continuous improvement.")
+    )
 }
+
