@@ -23,8 +23,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Book
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
@@ -65,12 +67,15 @@ fun HomeScreen(
     rankVsMarksList: List<RankVsMarksItem> = emptyList(),
     userPoints: Int = 450,
     userRank: Int = 5,
+    testTimeDisplay: String = "0.5 hrs",
     badges: List<BadgeItem> = emptyList(),
+    bookmarkedCount: Int = 0,
     onStartFreeTest: () -> Unit,
     onUpgradeClick: () -> Unit,
     onNavigateTab: (BottomTab) -> Unit,
     onOpenAdmin: () -> Unit,
-    onOpenSeniorChat: () -> Unit = {}
+    onOpenSeniorChat: () -> Unit = {},
+    onOpenBookmarks: () -> Unit = {}
 ) {
 
     LazyColumn(
@@ -177,6 +182,105 @@ fun HomeScreen(
             }
         }
 
+        // Live AI Doubt Solver Hero Banner Card
+        item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(
+                        Brush.horizontalGradient(
+                            colors = listOf(Color(0xFF4F46E5), Color(0xFF6366F1), Color(0xFF818CF8))
+                        )
+                    )
+                    .clickable { onNavigateTab(BottomTab.DOUBTS) }
+                    .padding(18.dp)
+            ) {
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color.White.copy(alpha = 0.25f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = androidx.compose.material.icons.Icons.Filled.AutoAwesome,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "LIVE AI GURU",
+                                    color = Color.White,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color(0xFFDCFCE7)
+                        ) {
+                            Text(
+                                text = "INSTANT SOLUTIONS",
+                                color = Color(0xFF15803D),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "🤖 AI Doubt Solver (Text & Photo)",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Text(
+                        text = "Upload question paper photos or type doubts • Immediate step-by-step Gemini solutions!",
+                        fontSize = 12.sp,
+                        color = Color.White.copy(alpha = 0.9f)
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        Button(
+                            onClick = { onNavigateTab(BottomTab.DOUBTS) },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = "Ask Question / Insert Photo ➔",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF4338CA)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // Top Header: Welcome Back Greeting & User Avatar with XP Tag
         item {
             Row(
@@ -212,6 +316,21 @@ fun HomeScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    IconButton(onClick = onOpenBookmarks) {
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFFFEF3C7),
+                            modifier = Modifier.size(42.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Bookmark,
+                                contentDescription = "Saved Bookmarks",
+                                tint = Color(0xFFD97706),
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+
                     IconButton(onClick = onOpenAdmin) {
                         Surface(
                             shape = CircleShape,
@@ -475,7 +594,7 @@ fun HomeScreen(
                             letterSpacing = 0.5.sp
                         )
                         Text(
-                            text = "4.2 hrs",
+                            text = testTimeDisplay,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF1E293B)

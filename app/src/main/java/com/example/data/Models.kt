@@ -66,6 +66,13 @@ data class BookmarkEntity(
     @PrimaryKey val questionId: Int,
     val subject: String,
     val questionText: String,
+    val imageUrl: String? = null,
+    val optionA: String = "",
+    val optionB: String = "",
+    val optionC: String = "",
+    val optionD: String = "",
+    val correctOption: String = "A",
+    val explanation: String = "",
     val timestamp: Long = System.currentTimeMillis()
 )
 
@@ -129,14 +136,28 @@ data class RankVsMarksItem(
 )
 
 data class SeniorChatBooking(
-    val bookingId: String,
-    val selectedDate: String,
-    val selectedTime: String,
+    val bookingId: String = "",
+    val userId: String = "kcet_std_001",
+    val userName: String = "Karthik Gowda",
+    val userEmail: String = "karthik.kcet2026@gmail.com",
+    val selectedDate: String = "",
+    val selectedTime: String = "",
     val mentorName: String = "Senior KCET Mentor (@ULLAS_U_SUVARNA)",
     val instagramHandle: String = "@ULLAS_U_SUVARNA",
-    val supportEmail: String = "kcetpracticepro9@gmail.com",
+    val supportEmail: String = "KcetGenZservice@gmail.com",
     val amountPaid: Int = 50,
     val bookedAtTimestamp: Long = System.currentTimeMillis(),
-    val status: String = "Confirmed"
+    val status: String = "Waiting for Senior Confirmation", // "Waiting for Senior Confirmation", "Confirmed", "Reschedule Needed", "Declined"
+    val adminMessage: String = ""
+)
+
+data class HelplineItem(
+    val id: String = "",
+    val title: String = "",
+    val contactValue: String = "",
+    val type: String = "EMAIL", // EMAIL, INSTAGRAM, PHONE, WHATSAPP
+    val description: String = "",
+    val actionUrl: String = "",
+    val isHighlighted: Boolean = true
 )
 

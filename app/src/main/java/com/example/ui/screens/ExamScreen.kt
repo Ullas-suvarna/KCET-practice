@@ -78,8 +78,10 @@ fun ExamScreen(
     userAnswers: Map<Int, UserAnswer>,
     timerSeconds: Int,
     isTimerPaused: Boolean,
+    bookmarkedQuestionIds: Set<Int> = emptySet(),
     onSelectOption: (Int, Option) -> Unit,
     onToggleMarkForReview: (Int) -> Unit,
+    onToggleBookmark: (Question) -> Unit = {},
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onJumpToQuestion: (Int) -> Unit,
@@ -238,18 +240,58 @@ fun ExamScreen(
                 .padding(16.dp)
                 .verticalScroll(rememberScrollState())
         ) {
-            // Subject Badge
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = Color(0xFF818CF8).copy(alpha = 0.2f)
+            // Subject Badge & Bookmark Action Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = currentQuestion.subject.name,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFF6366F1),
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                )
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFF818CF8).copy(alpha = 0.2f)
+                ) {
+                    Text(
+                        text = currentQuestion.subject.name,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF6366F1),
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+
+                val isBookmarked = bookmarkedQuestionIds.contains(currentQuestion.id)
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isBookmarked) Color(0xFFFEF3C7) else Color(0xFFF1F5F9),
+                    border = if (isBookmarked) androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B)) else null,
+                    modifier = Modifier.clickable {
+                        onToggleBookmark(currentQuestion)
+                        Toast.makeText(
+                            context,
+                            if (isBookmarked) "Removed from Saved Bookmarks" else "Question Saved to Bookmarks!",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                            contentDescription = "Bookmark Question",
+                            tint = if (isBookmarked) Color(0xFFD97706) else Color(0xFF64748B),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = if (isBookmarked) "Bookmarked" else "Bookmark",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isBookmarked) Color(0xFFD97706) else Color(0xFF64748B)
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(12.dp))

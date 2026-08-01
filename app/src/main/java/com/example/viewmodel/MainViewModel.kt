@@ -31,12 +31,14 @@ import kotlinx.coroutines.launch
 
 import com.example.data.SeniorChatBooking
 
+import com.example.data.BookmarkEntity
+
 enum class Screen {
-    SPLASH, ONBOARDING, AUTH, MAIN, EXAM, RESULT, ADMIN, SENIOR_CHAT
+    SPLASH, ONBOARDING, AUTH, MAIN, EXAM, RESULT, ADMIN, SENIOR_CHAT, BOOKMARKS
 }
 
 enum class BottomTab {
-    HOME, PRACTICE, RESOURCES, COUNSELLING, PROFILE
+    HOME, PRACTICE, DOUBTS, VIDEOS, RESOURCES, COUNSELLING, PROFILE
 }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -52,21 +54,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val selectedTab: StateFlow<BottomTab> = _selectedTab.asStateFlow()
 
     // Senior Mentorship Live Chat Bookings
-    private val _seniorChatBookings = MutableStateFlow<List<SeniorChatBooking>>(emptyList())
-    val seniorChatBookings: StateFlow<List<SeniorChatBooking>> = _seniorChatBookings.asStateFlow()
+    val seniorChatBookings: StateFlow<List<SeniorChatBooking>> = repository.seniorChatBookings.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
 
     fun bookSeniorChatSession(date: String, time: String) {
+        val user = userProfile.value
         val newBooking = SeniorChatBooking(
             bookingId = "KCET-LIVE-${(1000..9999).random()}",
+            userId = user.uid,
+            userName = user.name,
+            userEmail = user.email,
             selectedDate = date,
             selectedTime = time,
-            amountPaid = 50
+            amountPaid = 50,
+            status = "Waiting for Senior Confirmation",
+            adminMessage = ""
         )
-        _seniorChatBookings.value = _seniorChatBookings.value + newBooking
+        repository.bookSeniorChatSession(newBooking)
     }
 
-    // Dark Mode
-    private val _isDarkMode = MutableStateFlow(true)
+    fun updateSeniorChatBookingStatus(bookingId: String, status: String, adminMessage: String) {
+        repository.updateSeniorChatBookingStatus(bookingId, status, adminMessage)
+    }
+
+    fun rescheduleSeniorChatSession(bookingId: String, date: String, time: String) {
+        repository.rescheduleSeniorChatSession(bookingId, date, time)
+    }
+
+    fun deleteSeniorChatBooking(bookingId: String) {
+        repository.deleteSeniorChatBooking(bookingId)
+    }
+
+    fun generateAndUpload180QuestionsForSet(testSetId: String) {
+        val questions = com.example.data.SampleData.generate180QuestionsForSet(testSetId)
+        repository.addQuestionBatch(questions)
+    }
+
+    // Dark Mode (Default OFF as requested by user)
+    private val _isDarkMode = MutableStateFlow(false)
     val isDarkMode: StateFlow<Boolean> = _isDarkMode.asStateFlow()
 
     fun toggleDarkMode() {
@@ -90,14 +118,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val isLoggedIn: StateFlow<Boolean> = _isLoggedIn.asStateFlow()
 
     fun login(email: String, name: String = "KCET Aspirant") {
-        _userProfile.value = _userProfile.value.copy(
-            email = email,
-            name = if (name.isNotBlank()) name else "KCET Aspirant"
-        )
+        val cleanEmail = email.lowercase().trim()
+        val calculatedUid = FirebaseService.auth.currentUser?.uid ?: cleanEmail.replace(".", "_").replace("@", "_").ifBlank { "kcet_std_001" }
         _isLoggedIn.value = true
         _currentScreen.value = Screen.MAIN
+
         viewModelScope.launch {
+            val remoteProfile = FirebaseService.getUserProfileOnce(calculatedUid)
+            if (remoteProfile != null) {
+                val isNowPremium = remoteProfile.isPremium || _userProfile.value.isPremium
+                _userProfile.value = remoteProfile.copy(
+                    email = cleanEmail,
+                    name = if (name.isNotBlank()) name else remoteProfile.name,
+                    isPremium = isNowPremium
+                )
+            } else {
+                _userProfile.value = _userProfile.value.copy(
+                    uid = calculatedUid,
+                    email = cleanEmail,
+                    name = if (name.isNotBlank()) name else "KCET Aspirant"
+                )
+            }
             FirebaseService.saveUserProfile(_userProfile.value)
+            startObservingUserData(_userProfile.value.uid)
         }
     }
 
@@ -139,6 +182,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = emptyList()
     )
 
+    // Announcements State from Firestore
+    val announcements: StateFlow<List<Announcement>> = repository.announcements.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    // Resources State from Firestore
+    val resources: StateFlow<List<ResourceItem>> = repository.resources.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
     // Test Series Sets State from Firestore
     val testSeriesSets: StateFlow<List<com.example.data.TestSeriesSet>> = repository.testSeriesSets.stateIn(
         scope = viewModelScope,
@@ -160,6 +217,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = emptyList()
     )
 
+    // Helplines State from Firestore
+    val helplines: StateFlow<List<com.example.data.HelplineItem>> = repository.helplines.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = com.example.data.SampleData.defaultHelplines
+    )
+
+
+    // Bookmarked Questions State
+    val bookmarkedQuestions: StateFlow<List<BookmarkEntity>> = repository.allBookmarks.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    fun toggleBookmark(question: Question) {
+        viewModelScope.launch {
+            val currentlyBookmarked = bookmarkedQuestions.value.any { it.questionId == question.id }
+            repository.toggleBookmark(question, currentlyBookmarked, userProfile.value.uid)
+        }
+    }
+
+    fun removeBookmark(questionId: Int) {
+        viewModelScope.launch {
+            repository.removeBookmarkById(questionId, userProfile.value.uid)
+        }
+    }
+
+    fun clearAllBookmarks() {
+        viewModelScope.launch {
+            val list = bookmarkedQuestions.value
+            repository.clearAllBookmarks(userProfile.value.uid, list)
+        }
+    }
+
+    fun isQuestionBookmarked(questionId: Int): Boolean {
+        return bookmarkedQuestions.value.any { it.questionId == questionId }
+    }
+
+    fun startPracticeWithBookmarks(bookmarkList: List<BookmarkEntity>) {
+        if (bookmarkList.isEmpty()) return
+        _currentQuestionIndex.value = 0
+        _userAnswers.value = emptyMap()
+        _visitedQuestions.value = setOf(bookmarkList.first().questionId)
+        _timerSeconds.value = (bookmarkList.size * 90).coerceAtLeast(300)
+        _isTimerPaused.value = false
+        startTimer()
+        _currentScreen.value = Screen.EXAM
+    }
 
     // Test History State
     val testResultsHistory: StateFlow<List<TestResultEntity>> = repository.allResults.stateIn(
@@ -198,6 +304,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun triggerPremiumDialog(show: Boolean) {
         _showPremiumDialog.value = show
+    }
+
+    // Badge Reward Congrats Dialog Trigger
+    private val _showBadgeCongratsDialog = MutableStateFlow(false)
+    val showBadgeCongratsDialog: StateFlow<Boolean> = _showBadgeCongratsDialog.asStateFlow()
+
+    fun dismissBadgeCongratsDialog() {
+        _showBadgeCongratsDialog.value = false
+    }
+
+    fun unlockAllBadges() {
+        val updated = _userBadges.value.map { it.copy(isUnlocked = true, progress = 1f, unlockedDate = "2026") }
+        _userBadges.value = updated
+        _userProfile.value = _userProfile.value.copy(isPremium = true)
+        _showBadgeCongratsDialog.value = true
+        viewModelScope.launch {
+            FirebaseService.saveUserProfile(_userProfile.value)
+            updated.forEach { badge ->
+                FirebaseService.saveBadge(badge)
+            }
+        }
     }
 
     // Gamification & Points State
@@ -256,42 +383,134 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
     val analyticsSummary: StateFlow<AnalyticsSummary> = _analyticsSummary.asStateFlow()
 
+    private var profileJob: Job? = null
+    private var testResultsJob: Job? = null
+
+    private fun startObservingUserData(uid: String) {
+        profileJob?.cancel()
+        testResultsJob?.cancel()
+
+        profileJob = viewModelScope.launch {
+            FirebaseService.observeUserProfile(uid).collect { remoteProfile ->
+                if (remoteProfile != null) {
+                    val current = _userProfile.value
+                    val mergedPremium = remoteProfile.isPremium || current.isPremium
+                    _userProfile.value = current.copy(
+                        isPremium = mergedPremium,
+                        name = if (current.name != "Karthik Gowda" && current.name.isNotBlank()) current.name else remoteProfile.name,
+                        kcetTargetRank = remoteProfile.kcetTargetRank.ifBlank { current.kcetTargetRank },
+                        targetStream = remoteProfile.targetStream.ifBlank { current.targetStream },
+                        photoUrl = remoteProfile.photoUrl ?: current.photoUrl
+                    )
+                    if (mergedPremium && !remoteProfile.isPremium) {
+                        FirebaseService.saveUserProfile(_userProfile.value)
+                    }
+                }
+            }
+        }
+
+        testResultsJob = viewModelScope.launch {
+            repository.observeFirestoreTestResults(uid).collect { results ->
+                if (results.isNotEmpty()) {
+                    repository.syncTestResultsToRoom(results)
+                }
+            }
+        }
+    }
+
     init {
         updateLeaderboard()
+        startObservingUserData(_userProfile.value.uid)
+        viewModelScope.launch {
+            testResultsHistory.collect { results ->
+                if (results.isNotEmpty()) {
+                    val totalCorrect = results.sumOf { it.correctCount }
+                    val totalQs = results.sumOf { it.totalQuestions }
+                    val calculatedAcc = if (totalQs > 0) (totalCorrect.toFloat() / totalQs) * 100f else 75f
+                    val earnedFromTests = results.sumOf { res ->
+                        val qCount = res.totalQuestions.coerceAtLeast(1)
+                        val speed = res.timeTakenSeconds / qCount
+                        (res.score * 15) + 50 + (if (speed < 40) 25 else 0)
+                    }
+                    _userPoints.value = 450 + earnedFromTests.toInt()
+                    _analyticsSummary.value = _analyticsSummary.value.copy(
+                        totalTestsTaken = results.size,
+                        overallAccuracy = calculatedAcc,
+                        totalPoints = _userPoints.value
+                    )
+                    updateLeaderboard()
+                }
+            }
+        }
+        viewModelScope.launch {
+            repository.badges.collect { firestoreBadges ->
+                if (firestoreBadges.isNotEmpty()) {
+                    _userBadges.value = firestoreBadges
+                    if (firestoreBadges.all { it.isUnlocked }) {
+                        if (!_userProfile.value.isPremium) {
+                            _userProfile.value = _userProfile.value.copy(isPremium = true)
+                            FirebaseService.saveUserProfile(_userProfile.value)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private fun updateLeaderboard() {
+        val currentName = userProfile.value.name
+        val currentPoints = _userPoints.value
+        val currentAcc = _analyticsSummary.value.overallAccuracy
+        val currentTests = _analyticsSummary.value.totalTestsTaken
+        val currentTargetRank = userProfile.value.kcetTargetRank
+
         val staticToppers = listOf(
             LeaderboardEntry(1, "Ananya Rao", "Under 100", 1450, 95.2f, 18, "AR"),
             LeaderboardEntry(2, "Rohan Kulkarni", "Under 250", 1320, 91.0f, 15, "RK"),
             LeaderboardEntry(3, "Deepika Bhat", "Under 350", 1180, 88.5f, 14, "DB"),
-            LeaderboardEntry(4, "Preetham Shetty", "Under 500", 1020, 84.0f, 12, "PS")
-        )
-        val userEntry = LeaderboardEntry(
-            rank = 5,
-            name = userProfile.value.name,
-            kcetTargetRank = userProfile.value.kcetTargetRank,
-            points = _userPoints.value,
-            accuracy = _analyticsSummary.value.overallAccuracy,
-            testsCount = _analyticsSummary.value.totalTestsTaken,
-            avatarInitials = userProfile.value.name.split(" ").mapNotNull { it.firstOrNull()?.uppercase() }.take(2).joinToString(""),
-            isCurrentUser = true
-        )
-        val lowerToppers = listOf(
-            LeaderboardEntry(6, "Suhas Patil", "Under 1200", 420, 78.0f, 6, "SP"),
-            LeaderboardEntry(7, "Meghana Hegde", "Under 1500", 380, 72.5f, 5, "MH")
+            LeaderboardEntry(4, "Preetham Shetty", "Under 500", 1020, 84.0f, 12, "PS"),
+            LeaderboardEntry(5, "Suhas Patil", "Under 1200", 420, 78.0f, 6, "SP"),
+            LeaderboardEntry(6, "Meghana Hegde", "Under 1500", 380, 72.5f, 5, "MH")
         )
 
-        val fullList = (staticToppers + userEntry + lowerToppers)
+        val initials = currentName.split(" ").mapNotNull { it.firstOrNull()?.uppercase() }.take(2).joinToString("")
+        val currentUserEntry = LeaderboardEntry(
+            rank = 0,
+            name = currentName,
+            kcetTargetRank = currentTargetRank,
+            points = currentPoints,
+            accuracy = currentAcc,
+            testsCount = currentTests,
+            avatarInitials = if (initials.isNotBlank()) initials else "KG",
+            isCurrentUser = true
+        )
+
+        val combined = (staticToppers + currentUserEntry)
+            .distinctBy { if (it.isCurrentUser) "me" else it.name }
             .sortedByDescending { it.points }
             .mapIndexed { idx, entry -> entry.copy(rank = idx + 1) }
 
-        _leaderboard.value = fullList
+        _leaderboard.value = combined
+
+        viewModelScope.launch {
+            FirebaseService.updateLeaderboardEntry(
+                profile = _userProfile.value,
+                points = currentPoints,
+                accuracy = currentAcc,
+                testsCount = currentTests
+            )
+        }
     }
 
     // Active test calculation summary
     private val _activeTestResult = MutableStateFlow<TestResultEntity?>(null)
     val activeTestResult: StateFlow<TestResultEntity?> = _activeTestResult.asStateFlow()
+
+    private val _activeQuestionsList = MutableStateFlow<List<Question>>(emptyList())
+    val activeQuestionsList: StateFlow<List<Question>> = _activeQuestionsList.asStateFlow()
+
+    private val _activeTestSet = MutableStateFlow<com.example.data.TestSeriesSet?>(null)
+    val activeTestSet: StateFlow<com.example.data.TestSeriesSet?> = _activeTestSet.asStateFlow()
 
     fun navigateTo(screen: Screen) {
         _currentScreen.value = screen
@@ -303,10 +522,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // Exam Controls
     fun startFreeTest() {
+        val freeQs = questionsList.value.ifEmpty { com.example.data.SampleData.sampleQuestions }
+        _activeQuestionsList.value = freeQs.take(20)
+        _activeTestSet.value = null
         _currentQuestionIndex.value = 0
         _userAnswers.value = emptyMap()
-        _visitedQuestions.value = setOf(questionsList.value.firstOrNull()?.id ?: 1)
+        _visitedQuestions.value = setOf(_activeQuestionsList.value.firstOrNull()?.id ?: 1)
         _timerSeconds.value = 1200 // 20 minutes
+        _isTimerPaused.value = false
+        _currentScreen.value = Screen.EXAM
+        startTimer()
+    }
+
+    fun startTestForSet(testSet: com.example.data.TestSeriesSet) {
+        _activeTestSet.value = testSet
+        val setQuestions = questionsList.value.filter { it.testSetId == testSet.id }
+        val finalQs = if (setQuestions.isNotEmpty()) {
+            setQuestions
+        } else {
+            com.example.data.SampleData.generate180QuestionsForSet(testSet.id).take(testSet.questionCount)
+        }
+        _activeQuestionsList.value = finalQs
+        _currentQuestionIndex.value = 0
+        _userAnswers.value = emptyMap()
+        _visitedQuestions.value = setOf(finalQs.firstOrNull()?.id ?: 1)
+        _timerSeconds.value = (testSet.durationMins * 60).coerceAtLeast(300)
         _isTimerPaused.value = false
         _currentScreen.value = Screen.EXAM
         startTimer()
@@ -332,16 +572,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectQuestionIndex(index: Int) {
-        if (index in questionsList.value.indices) {
+        val currentList = _activeQuestionsList.value.ifEmpty { questionsList.value }
+        if (index in currentList.indices) {
             _currentQuestionIndex.value = index
-            val qId = questionsList.value[index].id
+            val qId = currentList[index].id
             _visitedQuestions.value = _visitedQuestions.value + qId
         }
     }
 
     fun nextQuestion() {
+        val currentList = _activeQuestionsList.value.ifEmpty { questionsList.value }
         val nextIdx = _currentQuestionIndex.value + 1
-        if (nextIdx < questionsList.value.size) {
+        if (nextIdx < currentList.size) {
             selectQuestionIndex(nextIdx)
         }
     }
@@ -386,7 +628,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun submitExam() {
         timerJob?.cancel()
-        val questions = questionsList.value
+        val questions = _activeQuestionsList.value.ifEmpty { questionsList.value }
         val answers = _userAnswers.value
 
         var correct = 0
@@ -407,22 +649,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val total = questions.size
         val score = correct // 1 mark per correct question in KCET
         val percentage = if (total > 0) (correct.toFloat() / total) * 100f else 0f
-        val timeSpentSeconds = 1200 - _timerSeconds.value
+        val durationMins = _activeTestSet.value?.durationMins ?: 20
+        val timeSpentSeconds = (durationMins * 60) - _timerSeconds.value
+
+        val testNameStr = _activeTestSet.value?.title ?: "KCET Grand Practice CBT Test"
 
         val result = TestResultEntity(
-            testName = "KCET Grand Sample CBT Test 1",
+            testName = testNameStr,
             totalQuestions = total,
             score = score,
             correctCount = correct,
             wrongCount = wrong,
             unansweredCount = unanswered,
-            timeTakenSeconds = timeSpentSeconds.toLong(),
+            timeTakenSeconds = timeSpentSeconds.coerceAtLeast(1).toLong(),
             percentage = percentage
         )
 
         _activeTestResult.value = result
         viewModelScope.launch {
-            repository.saveTestResult(result)
+            repository.saveTestResult(result, _userProfile.value.uid)
         }
 
         // Award Gamification Points (15 XP per correct + 50 XP completion bonus + 25 speed bonus)
@@ -432,7 +677,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         // Evaluate Badges
         val testsCount = testResultsHistory.value.size + 1
-        _userBadges.value = _userBadges.value.map { badge ->
+        val newBadges = _userBadges.value.map { badge ->
             when (badge.id) {
                 "b1" -> badge.copy(isUnlocked = true, progress = 1f)
                 "b2" -> if (percentage >= 80f) badge.copy(isUnlocked = true, progress = 1f) else badge.copy(progress = (percentage / 80f).coerceIn(0f, 1f))
@@ -443,6 +688,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 "b7" -> if (score >= 14) badge.copy(isUnlocked = true, progress = 1f) else badge
                 "b8" -> if (score >= 15) badge.copy(isUnlocked = true, progress = 1f) else badge
                 else -> badge
+            }
+        }
+        _userBadges.value = newBadges
+
+        viewModelScope.launch {
+            newBadges.forEach { FirebaseService.saveBadge(it) }
+        }
+
+        if (newBadges.isNotEmpty() && newBadges.all { it.isUnlocked }) {
+            _userProfile.value = _userProfile.value.copy(isPremium = true)
+            _showBadgeCongratsDialog.value = true
+            viewModelScope.launch {
+                FirebaseService.saveUserProfile(_userProfile.value)
             }
         }
 
@@ -650,6 +908,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteRankVsMarks(id: String) {
         repository.deleteRankVsMarks(id)
+    }
+
+    fun addHelpline(
+        title: String,
+        contactValue: String,
+        type: String,
+        description: String,
+        actionUrl: String
+    ) {
+        val item = com.example.data.HelplineItem(
+            id = "help_${System.currentTimeMillis()}",
+            title = title,
+            contactValue = contactValue,
+            type = type,
+            description = description,
+            actionUrl = actionUrl,
+            isHighlighted = true
+        )
+        repository.addOrUpdateHelpline(item)
+    }
+
+    fun deleteHelpline(id: String) {
+        repository.deleteHelpline(id)
     }
 }
 

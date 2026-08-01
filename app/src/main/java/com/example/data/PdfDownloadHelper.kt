@@ -239,7 +239,7 @@ object PdfDownloadHelper {
 
             // Footer
             canvas.drawLine(35f, 790f, 560f, 790f, borderPaint)
-            canvas.drawText("KCET Practice Pro App • Verified Karnataka KEA Exam Study Content • Page $pageNum of $totalPages", 35f, 808f, textPaint)
+            canvas.drawText("KCET Gen Z ⭐ App • Verified Karnataka KEA Exam Study Content • Page $pageNum of $totalPages", 35f, 808f, textPaint)
 
             pdfDocument.finishPage(page)
         }
@@ -278,7 +278,8 @@ object PdfDownloadHelper {
             "r4" -> getMathsShortcutsPages()
             "r5" -> getChemistryOrganicPages()
             else -> {
-                if (item.category.contains("Syllabus", ignoreCase = true)) getSyllabusPages()
+                if (item.category.contains("Counselling", ignoreCase = true) || item.title.contains("Counselling", ignoreCase = true) || item.title.contains("Roadmap", ignoreCase = true)) getCounsellingRoadmapPages(item)
+                else if (item.category.contains("Syllabus", ignoreCase = true)) getSyllabusPages()
                 else if (item.category.contains("PYQ", ignoreCase = true)) getPyq2025Pages()
                 else if (item.yearOrSubject.contains("Physics", ignoreCase = true)) getPhysicsFormulaPages()
                 else if (item.yearOrSubject.contains("Math", ignoreCase = true)) getMathsShortcutsPages()
@@ -554,6 +555,87 @@ object PdfDownloadHelper {
                     PdfBlock.FormulaItem("First Order Rate Constant", "k = (2.303 / t) log ([A]0 / [A])", "Half life t_1/2 = 0.693 / k"),
                     PdfBlock.FormulaItem("Colligative Property (Relative Lowering)", "(P° - P) / P° = i * X_solute", "i = van't Hoff factor"),
                     PdfBlock.BoxNote("Coordination Hybridization Rule", "Coordination 4: sp3 (Tetrahedral, paramagnetic) or dsp2 (Square planar, diamagnetic). Coordination 6: d2sp3 or sp3d2 (Octahedral).", isHighlight = true)
+                )
+            )
+        )
+    }
+
+    private fun getCounsellingRoadmapPages(item: ResourceItem): List<PdfPageContent> {
+        return listOf(
+            PdfPageContent(
+                sectionTitle = "PAGE 1: KEA COUNSELLING EVENTS ROADMAP & DOCUMENT VERIFICATION",
+                blocks = listOf(
+                    PdfBlock.Header("Official KEA Counselling Process Master Roadmap 2026"),
+                    PdfBlock.Paragraph(if (item.description.isNotBlank()) item.description else "Complete KEA step-by-step PDF roadmap covering Document Verification, Secret Key, Mock Option Entry, Seat Matrix, Choice 1-4 Rules, and Final College Reporting."),
+                    PdfBlock.BoxNote(
+                        "Step 1: Document Verification at KEA Helpline Centers",
+                        "Mandatory physical verification of 11 original documents. Candidates receive 'Verification Slip' and 'Secret Key' required for Option Entry login.",
+                        isHighlight = true
+                    ),
+                    PdfBlock.Bullet("1. KCET 2026 Admission Ticket & Final Printout of Online Application Form."),
+                    PdfBlock.Bullet("2. SSLC / 10th Standard Marks Card (Date of birth proof)."),
+                    PdfBlock.Bullet("3. 2nd PUC / 12th Standard Marks Card."),
+                    PdfBlock.Bullet("4. 7 Years Study Certificate in Karnataka signed by BEO / DDPI."),
+                    PdfBlock.Bullet("5. Rural / Kannada Medium Study Certificate (If claiming reservation)."),
+                    PdfBlock.Bullet("6. Caste / Income Certificate (Category 1, 2A, 2B, 3A, 3B, SC, ST)."),
+                    PdfBlock.Bullet("7. Hyderabad Karnataka (371J) Eligibility Certificate (If applicable)."),
+                    PdfBlock.Bullet("8. NATA / NEET Score Card (For Architecture / AYUSH seats)."),
+                    PdfBlock.BoxNote(
+                        "Secret Key Security Warning",
+                        "Keep your KEA Secret Key strictly confidential! Do NOT share it with friends, internet cafes, or unauthorized persons. Anyone with your key can alter your college priority order.",
+                        isHighlight = false
+                    )
+                )
+            ),
+            PdfPageContent(
+                sectionTitle = "PAGE 2: SEAT MATRIX & OPTION ENTRY PRIORITY ORDER",
+                blocks = listOf(
+                    PdfBlock.Header("Option Entry Strategy & Seat Matrix Categories"),
+                    PdfBlock.Paragraph("Candidates can enter unlimited college & branch combinations in order of preference. KEA system allocates seats strictly from Option #1 downwards."),
+                    PdfBlock.BoxNote(
+                        "Mock Option Entry Round",
+                        "KEA conducts a trial Mock Round to let candidates test options and view mock rank cutoffs before final locking.",
+                        isHighlight = true
+                    ),
+                    PdfBlock.Bullet("Rule #1: Put top engineering colleges (RVCE, BMSCE, MSRIT, PES, UVCE) in top preferences (1 to 15)."),
+                    PdfBlock.Bullet("Rule #2: Always verify Seat Matrix (GM, 2A, 2B, SC/ST, Rural, Kannada Medium, Management/SNQ Quota)."),
+                    PdfBlock.Bullet("Rule #3: Save & print your final locked Option Entry list after every modification."),
+                    PdfBlock.BoxNote(
+                        "SNQ (Supernumerary Quota) Advantage",
+                        "Candidates with family income < 6 Lakhs are eligible for SNQ seats with tuition fee reduced to ~₹4,000/year!",
+                        isHighlight = true
+                    )
+                )
+            ),
+            PdfPageContent(
+                sectionTitle = "PAGE 3: ALLOTMENT CHOICES & FINAL COLLEGE REPORTING",
+                blocks = listOf(
+                    PdfBlock.Header("Round 1 & Round 2 Seat Allotment Choices (1, 2, 3, 4)"),
+                    PdfBlock.BoxNote(
+                        "Choice 1: SATISFIED & ACCEPT",
+                        "Pay fee online / bank challan, download Admission Order, report to allocated college with original documents before deadline.",
+                        isHighlight = true
+                    ),
+                    PdfBlock.BoxNote(
+                        "Choice 2: ACCEPT & UPGRADE IN ROUND 2",
+                        "Pay fee for current seat, hold it provisionally, and participate in Round 2 for higher college options only.",
+                        isHighlight = false
+                    ),
+                    PdfBlock.BoxNote(
+                        "Choice 3: REJECT & HOLD FOR ROUND 2",
+                        "Reject current allotted seat without paying fee, participate in Round 2 for better options.",
+                        isHighlight = false
+                    ),
+                    PdfBlock.BoxNote(
+                        "Choice 4: EXIT COUNSELLING",
+                        "Reject current seat & exit KEA counselling process completely.",
+                        isHighlight = false
+                    ),
+                    PdfBlock.Header("Final Admission & Fee Payment Checklist"),
+                    PdfBlock.Bullet("Step A: Pay KEA prescribed tuition fee via NetBanking / SBI Challan."),
+                    PdfBlock.Bullet("Step B: Download Official KEA Admission Order from student portal."),
+                    PdfBlock.Bullet("Step C: Submit Admission Order & Original Verification Slip at allocated college."),
+                    PdfBlock.Bullet("Step D: Obtain College Receipt and confirm KEA portal admission status.")
                 )
             )
         )

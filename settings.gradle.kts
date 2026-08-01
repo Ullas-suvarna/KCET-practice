@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "KCET Practice Pro"
+rootProject.name = "KCET Gen Z"
 
 include(":app")

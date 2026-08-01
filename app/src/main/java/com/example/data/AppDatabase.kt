@@ -40,7 +40,7 @@ interface BookmarkDao {
     fun isBookmarked(questionId: Int): Flow<Boolean>
 }
 
-@Database(entities = [TestResultEntity::class, BookmarkEntity::class], version = 1, exportSchema = false)
+@Database(entities = [TestResultEntity::class, BookmarkEntity::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun testResultDao(): TestResultDao
     abstract fun bookmarkDao(): BookmarkDao

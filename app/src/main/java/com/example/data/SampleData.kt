@@ -242,7 +242,7 @@ object SampleData {
             id = "a2",
             title = "Free Grand Mock Test 1 Live!",
             date = "Yesterday",
-            message = "Take the 20-question full-length practice CBT test with timer and detailed solutions now on KCET Practice Pro.",
+            message = "Take the 20-question full-length practice CBT test with timer and detailed solutions now on KCET Gen Z ⭐.",
             isImportant = false
         ),
         Announcement(
@@ -299,6 +299,24 @@ object SampleData {
             yearOrSubject = "Chemistry",
             downloadUrl = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
             description = "Comprehensive summary of Aldol, Cannizzaro, Reimer-Tiemann, and Kolbe's reactions."
+        ),
+        ResourceItem(
+            id = "r_counselling_roadmap_1",
+            title = "KCET Official Counselling Events Roadmap & Guidelines 2026",
+            category = "Counselling Roadmap",
+            fileSize = "3.8 MB",
+            yearOrSubject = "KEA Counselling 2026",
+            downloadUrl = "https://cetonline.karnataka.gov.in/kea/kcet2026_counselling_roadmap.pdf",
+            description = "Complete KEA step-by-step PDF roadmap covering Document Verification, Secret Key, Mock Option Entry, Seat Matrix, Choice 1-4 Rules, and Final College Reporting."
+        ),
+        ResourceItem(
+            id = "r_counselling_roadmap_2",
+            title = "KEA Document Verification Checklist & Originals Flowchart",
+            category = "Counselling Roadmap",
+            fileSize = "2.1 MB",
+            yearOrSubject = "Document Verification",
+            downloadUrl = "https://cetonline.karnataka.gov.in/kea/kcet2026_doc_checklist.pdf",
+            description = "Detailed list of 11 original documents required for KEA Helpline Center verification, study certificate counter-signature format, and caste/income validity rules."
         )
     )
 
@@ -499,6 +517,139 @@ object SampleData {
         TestSeriesSet("ts_7", "Chemistry: Organic Named Reactions", "Chapter-wise Tests", 30, 30, isPremium = true, description = "Master named reactions and mechanisms for KCET."),
         TestSeriesSet("ts_8", "Mathematics: Matrices & Calculus", "Chapter-wise Tests", 30, 30, isPremium = true, description = "Focused practice set for calculus, limits, and matrix algebra."),
         TestSeriesSet("ts_9", "Daily Practice Questions (DPP Series 12)", "Daily Practice", 15, 15, isPremium = true, description = "Quick daily 15-minute test set for continuous improvement.")
+    )
+
+    fun generate180QuestionsForSet(testSetId: String): List<Question> {
+        val list = mutableListOf<Question>()
+        val setHash = kotlin.math.abs(testSetId.hashCode()).let { if (it == Int.MIN_VALUE) 1000 else it }
+        val baseId = (setHash % 10000) * 200 + 100
+
+        // Physics 60 Questions (1 to 60)
+        val physicsTopics = listOf(
+            "Circular Motion & Centripetal Acceleration" to "In uniform circular motion, a_c = v²/R directed towards the center.",
+            "Universal Gravitational Constant (G)" to "Dimensional formula for G is [M⁻¹ L³ T⁻²] derived from F = G m1 m2 / r².",
+            "Electric Dipole Torque" to "Torque τ = p × E with magnitude pE sin θ.",
+            "Wire Resistance Stretching" to "When stretched to 2L keeping volume constant, new resistance R' = 4R.",
+            "Magnetic Moment Work Done" to "Work done W = MB(cos 0° - cos 180°) = 2MB.",
+            "Photoelectric Stopping Potential" to "Einstein's equation e V0 = h ν - W. Doubling ν increases V0 by > 2x.",
+            "Lens Combination Focal Length" to "1/F = 1/f1 + 1/f2 = 1/20 + 1/(-10) = -1/20 cm => F = -20 cm.",
+            "Self Inductance of Solenoid" to "Self inductance L = μ0 N² A / l.",
+            "De Broglie Wavelength" to "λ = h / p = h / √(2 m E).",
+            "Transformer Turns Ratio" to "Vs / Vp = Ns / Np = Ip / Is."
+        )
+
+        for (i in 1..60) {
+            val topic = physicsTopics[(i - 1) % physicsTopics.size]
+            val id = baseId + i
+            list.add(
+                Question(
+                    id = id,
+                    subject = Subject.PHYSICS,
+                    questionText = "Q$i (Physics). [Topic: ${topic.first}] - High yield KCET Physics question #$i:",
+                    optionA = "A) Standard concept formula expression #$i",
+                    optionB = "B) Derived formula / correct numeric value",
+                    optionC = "C) Inverse dimensional ratio",
+                    optionD = "D) Zero or infinite limit case",
+                    correctOption = Option.B,
+                    explanation = "Step-by-Step Solution for Q$i (Physics):\n1. Key Concept: ${topic.first}.\n2. Theoretical Formula / Principle: ${topic.second}.\n3. Substituting values yields Option B as the correct answer.",
+                    testSetId = testSetId,
+                    isPremium = true
+                )
+            )
+        }
+
+        // Chemistry 60 Questions (61 to 120)
+        val chemTopics = listOf(
+            "Optical Isomerism in Lactic Acid" to "Lactic acid possesses a chiral carbon attached to 4 distinct groups.",
+            "KMnO4 Oxidation State" to "Manganese has oxidation state +7 in Potassium Permanganate (KMnO4).",
+            "Ethanol + Sodium Reaction" to "Releases H2 gas: 2 C2H5OH + 2 Na -> 2 C2H5ONa + H2(g).",
+            "Haber Process Catalyst" to "Finely divided Iron with Molybdenum promoter.",
+            "Faraday First Law" to "Mass deposited m = Z * Q = Z * I * t.",
+            "Terylene Polymerization" to "Condensation polymer of Ethylene Glycol and Terephthalic Acid.",
+            "XeF4 VSEPR Geometry" to "XeF4 has 4 bond pairs and 2 lone pairs -> Square Planar.",
+            "Nernst Equation Cell EMF" to "E_cell = E°_cell - (0.0591 / n) log Q.",
+            "Order of Reaction Units" to "Rate constant k units for nth order: (mol/L)^(1-n) s⁻¹.",
+            "Coordination Number of Fe in K4[Fe(CN)6]" to "Fe is in +2 oxidation state, coordination number = 6."
+        )
+
+        for (i in 61..120) {
+            val qIndex = i - 60
+            val topic = chemTopics[(i - 61) % chemTopics.size]
+            val id = baseId + i
+            list.add(
+                Question(
+                    id = id,
+                    subject = Subject.CHEMISTRY,
+                    questionText = "Q$qIndex (Chemistry). [Topic: ${topic.first}] - KCET Chemistry question #$qIndex:",
+                    optionA = "A) Unstable intermediate state",
+                    optionB = "B) Correct molecular product / formula",
+                    optionC = "C) Non-spontaneous reaction state",
+                    optionD = "D) Inert catalyst byproduct",
+                    correctOption = Option.B,
+                    explanation = "Step-by-Step Solution for Q$i (Chemistry):\n1. Key Concept: ${topic.first}.\n2. Chemical Principle: ${topic.second}.\n3. Evaluating the mechanism confirms Option B is correct.",
+                    testSetId = testSetId,
+                    isPremium = true
+                )
+            )
+        }
+
+        // Mathematics 60 Questions (121 to 180)
+        val mathTopics = listOf(
+            "Adjugate Determinant |adj(A)|" to "|adj(A)| = |A|^(n-1). For n=3, |A|=5 => |adj(A)| = 25.",
+            "Trigonometric Limit sin(5x)/x" to "lim(x->0) sin(5x)/x = 5.",
+            "Derivative of e^(x²)" to "d/dx (e^(x²)) = 2x e^(x²).",
+            "Integral of sin²(x) from 0 to π/2" to "Using King's property, ∫_0^(π/2) sin²x dx = π/4.",
+            "Distance between Parallel Planes" to "d = |D2 - D1| / √(A²+B²+C²).",
+            "Probability of Dice Sum 8" to "Favorable outcomes (2,6),(3,5),(4,4),(5,3),(6,2) -> 5/36.",
+            "Vector Dot Product Perpendicular" to "Vectors a and b are perpendicular iff a · b = 0.",
+            "Differential Equation Order & Degree" to "Order is highest derivative order, degree is power of highest derivative.",
+            "AP Sum Formula" to "Sn = n/2 [2a + (n-1)d].",
+            "Area under Curve y = x²" to "∫_0^1 x² dx = [x³/3]_0^1 = 1/3."
+        )
+
+        for (i in 121..180) {
+            val qIndex = i - 120
+            val topic = mathTopics[(i - 121) % mathTopics.size]
+            val id = baseId + i
+            list.add(
+                Question(
+                    id = id,
+                    subject = Subject.MATHEMATICS,
+                    questionText = "Q$qIndex (Mathematics). [Topic: ${topic.first}] - Standard KCET Mathematics problem #$qIndex:",
+                    optionA = "A) Computational error value",
+                    optionB = "B) Correct derived formula / numerical value",
+                    optionC = "C) Zero solution",
+                    optionD = "D) Undefined / Infinite solution",
+                    correctOption = Option.B,
+                    explanation = "Step-by-Step Solution for Q$i (Mathematics):\n1. Key Concept: ${topic.first}.\n2. Formula / Method: ${topic.second}.\n3. Performing the step-by-step calculus/algebra gives Option B.",
+                    testSetId = testSetId,
+                    isPremium = true
+                )
+            )
+        }
+
+        return list
+    }
+
+    val defaultHelplines = listOf(
+        HelplineItem(
+            id = "h1",
+            title = "Official Helpline Email",
+            contactValue = "KcetGenZservice@gmail.com",
+            type = "EMAIL",
+            description = "Contact official KCET Gen Z student support for technical issues, account help, and exam queries.",
+            actionUrl = "mailto:KcetGenZservice@gmail.com",
+            isHighlighted = true
+        ),
+        HelplineItem(
+            id = "h2",
+            title = "Official Instagram",
+            contactValue = "@ULLAS U SUVARNA",
+            type = "INSTAGRAM",
+            description = "Follow & DM @ULLAS U SUVARNA on Instagram for live KCET updates, counseling guidance & direct mentorship.",
+            actionUrl = "https://instagram.com/ullassuvarna65",
+            isHighlighted = true
+        )
     )
 }
 

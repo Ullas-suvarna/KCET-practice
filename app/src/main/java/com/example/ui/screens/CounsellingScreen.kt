@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -23,75 +26,322 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.AssignmentTurnedIn
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FormatListNumbered
 import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Rule
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Surface
 import com.example.data.CounsellingStep
 import com.example.data.ImportantDateItem
+import com.example.data.PdfDownloadHelper
+import com.example.data.ResourceItem
 import com.example.data.SampleData
+import com.example.ui.components.PdfViewerDialog
+import kotlinx.coroutines.launch
+import java.io.File
 
 @Composable
 fun CounsellingScreen(
+    resources: List<ResourceItem> = emptyList(),
     importantDates: List<ImportantDateItem> = emptyList(),
     onOpenSeniorChat: () -> Unit = {}
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var activePdfDialog by remember { mutableStateOf<Pair<ResourceItem, File>?>(null) }
+    var downloadingId by remember { mutableStateOf<String?>(null) }
+
     val steps = SampleData.counsellingSteps
     val faqs = SampleData.counsellingFaqs
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp)
-    ) {
-        item { Spacer(modifier = Modifier.height(10.dp)) }
-
-        item {
-            Text(
-                text = "KEA COUNSELLING",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF4F46E5),
-                letterSpacing = 1.sp
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = "Counselling Guide",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF0F172A)
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Complete roadmap from document verification & secret key to option entry and final seat reporting.",
-                fontSize = 13.sp,
-                color = Color(0xFF64748B)
-            )
+    val roadmapPdfs = remember(resources) {
+        val list = resources.filter {
+            it.category.contains("Counselling", ignoreCase = true) ||
+            it.category.contains("Roadmap", ignoreCase = true) ||
+            it.title.contains("Counselling", ignoreCase = true) ||
+            it.title.contains("Roadmap", ignoreCase = true)
         }
+        if (list.isNotEmpty()) list else SampleData.sampleResources.filter {
+            it.category.contains("Counselling", ignoreCase = true) ||
+            it.category.contains("Roadmap", ignoreCase = true) ||
+            it.title.contains("Counselling", ignoreCase = true) ||
+            it.title.contains("Roadmap", ignoreCase = true)
+        }
+    }
+
+    val openOrDownloadPdf: (ResourceItem) -> Unit = { item ->
+        scope.launch {
+            val pdfFile = PdfDownloadHelper.getPdfFile(context, item.id)
+            if (PdfDownloadHelper.isPdfDownloaded(context, item.id)) {
+                activePdfDialog = Pair(item, pdfFile)
+            } else {
+                Toast.makeText(context, "Opening Roadmap PDF: ${item.title}...", Toast.LENGTH_SHORT).show()
+                downloadingId = item.id
+                val result = PdfDownloadHelper.downloadPdf(context, item)
+                downloadingId = null
+                if (result.isSuccess) {
+                    activePdfDialog = Pair(item, result.getOrNull()!!)
+                } else {
+                    Toast.makeText(context, "Could not load PDF: ${result.exceptionOrNull()?.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp)
+        ) {
+            item { Spacer(modifier = Modifier.height(10.dp)) }
+
+            item {
+                Text(
+                    text = "KEA COUNSELLING",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF4F46E5),
+                    letterSpacing = 1.sp
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Counselling Guide",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF0F172A)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Complete roadmap from document verification & secret key to option entry and final seat reporting.",
+                    fontSize = 13.sp,
+                    color = Color(0xFF64748B)
+                )
+            }
+
+            // KCET Counselling Events Roadmap PDF Documents Section
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color(0xFFEEF2FF))
+                        .border(1.5.dp, Color(0xFF6366F1), RoundedCornerShape(20.dp))
+                        .padding(18.dp)
+                ) {
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFFE11D48)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PictureAsPdf,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "OFFICIAL PDF ROADMAP",
+                                        color = Color.White,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = Color(0xFFDCFCE7)
+                            ) {
+                                Text(
+                                    text = "Admin Managed • ${roadmapPdfs.size} PDFs",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF15803D),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Text(
+                            text = "KCET Counselling Events Roadmap PDF",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color(0xFF1E1B4B)
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Text(
+                            text = "Complete step-by-step official PDF documents uploaded and controlled live by Admin. View, download, or open offline.",
+                            fontSize = 12.sp,
+                            color = Color(0xFF475569)
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        roadmapPdfs.forEach { pdfItem ->
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(14.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = Color(0xFFFFE4E6),
+                                            modifier = Modifier.size(42.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = Icons.Default.PictureAsPdf,
+                                                    contentDescription = null,
+                                                    tint = Color(0xFFE11D48),
+                                                    modifier = Modifier.size(22.dp)
+                                                )
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.width(12.dp))
+
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = pdfItem.title,
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF0F172A)
+                                            )
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                text = "${pdfItem.yearOrSubject} • Size: ${pdfItem.fileSize}",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Color(0xFF4F46E5)
+                                            )
+                                        }
+                                    }
+
+                                    if (pdfItem.description.isNotBlank()) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = pdfItem.description,
+                                            fontSize = 12.sp,
+                                            color = Color(0xFF64748B),
+                                            lineHeight = 16.sp
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Button(
+                                            onClick = { openOrDownloadPdf(pdfItem) },
+                                            modifier = Modifier.weight(1f),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5)),
+                                            shape = RoundedCornerShape(10.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Visibility,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = if (downloadingId == pdfItem.id) "Loading..." else "Read PDF Roadmap",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+
+                                        OutlinedButton(
+                                            onClick = {
+                                                if (pdfItem.downloadUrl.isNotBlank() && (pdfItem.downloadUrl.startsWith("http://") || pdfItem.downloadUrl.startsWith("https://"))) {
+                                                    try {
+                                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(pdfItem.downloadUrl))
+                                                        context.startActivity(intent)
+                                                    } catch (e: Exception) {
+                                                        Toast.makeText(context, "Opening PDF Roadmap...", Toast.LENGTH_SHORT).show()
+                                                        openOrDownloadPdf(pdfItem)
+                                                    }
+                                                } else {
+                                                    openOrDownloadPdf(pdfItem)
+                                                }
+                                            },
+                                            modifier = Modifier.weight(0.9f),
+                                            shape = RoundedCornerShape(10.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.OpenInNew,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = "External Link",
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
         // Live Mentorship Card in Counselling Screen
         item {
@@ -290,6 +540,15 @@ fun CounsellingScreen(
 
         item { Spacer(modifier = Modifier.height(20.dp)) }
     }
+
+    if (activePdfDialog != null) {
+        PdfViewerDialog(
+            resource = activePdfDialog!!.first,
+            pdfFile = activePdfDialog!!.second,
+            onDismiss = { activePdfDialog = null }
+        )
+    }
+}
 }
 
 @Composable

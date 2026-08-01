@@ -18,11 +18,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.outlined.Assignment
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Person
@@ -63,6 +67,8 @@ fun BottomNavBar(
             val items = listOf(
                 Triple(BottomTab.HOME, "Home", Pair(Icons.Filled.Home, Icons.Outlined.Home)),
                 Triple(BottomTab.PRACTICE, "Practice", Pair(Icons.Filled.Assignment, Icons.Outlined.Assignment)),
+                Triple(BottomTab.DOUBTS, "AI Doubts", Pair(Icons.Filled.AutoAwesome, Icons.Outlined.AutoAwesome)),
+                Triple(BottomTab.VIDEOS, "Videos", Pair(Icons.Filled.PlayCircle, Icons.Outlined.PlayCircle)),
                 Triple(BottomTab.RESOURCES, "Resources", Pair(Icons.Filled.Book, Icons.Outlined.Book)),
                 Triple(BottomTab.COUNSELLING, "Counselling", Pair(Icons.Filled.School, Icons.Outlined.School)),
                 Triple(BottomTab.PROFILE, "Profile", Pair(Icons.Filled.Person, Icons.Outlined.Person))

@@ -18,12 +18,15 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Help
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -56,6 +59,9 @@ fun ResultScreen(
     result: TestResultEntity,
     questions: List<Question>,
     userAnswers: Map<Int, UserAnswer>,
+    bookmarkedQuestionIds: Set<Int> = emptySet(),
+    onToggleBookmark: (Question) -> Unit = {},
+    onOpenBookmarks: () -> Unit = {},
     onBackToDashboard: () -> Unit,
     onRetakeTest: () -> Unit
 ) {
@@ -243,15 +249,30 @@ fun ResultScreen(
         }
 
         item {
-            Button(
-                onClick = onBackToDashboard,
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF312E81))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(imageVector = Icons.Default.Dashboard, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Back to Dashboard", fontWeight = FontWeight.Bold)
+                OutlinedButton(
+                    onClick = onOpenBookmarks,
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.Bookmark, contentDescription = null, tint = Color(0xFFD97706), modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Saved Bookmarks", fontWeight = FontWeight.Bold, color = Color(0xFFD97706))
+                }
+
+                Button(
+                    onClick = onBackToDashboard,
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF312E81))
+                ) {
+                    Icon(imageVector = Icons.Default.Dashboard, contentDescription = null)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Dashboard", fontWeight = FontWeight.Bold)
+                }
             }
         }
 
@@ -269,6 +290,7 @@ fun ResultScreen(
             itemsIndexed(questions) { idx, q ->
                 val userOpt = userAnswers[q.id]?.selectedOption
                 val isCorrect = userOpt == q.correctOption
+                val isBookmarked = bookmarkedQuestionIds.contains(q.id)
 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -289,12 +311,26 @@ fun ResultScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "Q${idx + 1}. ${q.subject.name}",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF818CF8)
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "Q${idx + 1}. ${q.subject.name}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF818CF8)
+                                )
+
+                                IconButton(
+                                    onClick = { onToggleBookmark(q) },
+                                    modifier = Modifier.size(28.dp).padding(start = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                                        contentDescription = "Bookmark",
+                                        tint = if (isBookmarked) Color(0xFFD97706) else Color(0xFF94A3B8),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
 
                             Surface(
                                 shape = RoundedCornerShape(6.dp),

@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
@@ -35,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.TestSeriesSet
 import com.example.ui.components.GlassCard
 
 data class TestCardItem(
@@ -46,14 +49,15 @@ data class TestCardItem(
     val isFree: Boolean = false
 )
 
-import com.example.data.TestSeriesSet
-
 @Composable
 fun PracticeScreen(
     isPremiumUser: Boolean,
     testSeriesSets: List<TestSeriesSet> = emptyList(),
+    bookmarkedCount: Int = 0,
     onStartFreeTest: () -> Unit,
-    onLockedFeatureClick: () -> Unit
+    onStartTestSet: (TestSeriesSet) -> Unit = {},
+    onLockedFeatureClick: () -> Unit,
+    onOpenBookmarks: () -> Unit = {}
 ) {
     val displaySets = if (testSeriesSets.isNotEmpty()) testSeriesSets else com.example.data.SampleData.sampleTestSeriesSets
     val freeSets = displaySets.filter { !it.isPremium }
@@ -68,20 +72,54 @@ fun PracticeScreen(
         item { Spacer(modifier = Modifier.height(10.dp)) }
 
         item {
-            Text(
-                text = "PRACTICE TESTS",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF4F46E5),
-                letterSpacing = 1.sp
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = "Mock CBT Exams",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF0F172A)
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "PRACTICE TESTS",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF4F46E5),
+                        letterSpacing = 1.sp
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Mock CBT Exams",
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF0F172A)
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color(0xFFFEF3C7),
+                    border = BorderStroke(1.dp, Color(0xFFF59E0B)),
+                    modifier = Modifier.clickable { onOpenBookmarks() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Bookmark,
+                            contentDescription = "Saved Bookmarks",
+                            tint = Color(0xFFD97706),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "Bookmarks ($bookmarkedCount)",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFB45309)
+                        )
+                    }
+                }
+            }
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = "Prepare with Computer-Based Test mock exams designed as per official KEA exam guidelines.",
@@ -154,7 +192,7 @@ fun PracticeScreen(
                         Spacer(modifier = Modifier.height(18.dp))
 
                         Button(
-                            onClick = onStartFreeTest,
+                            onClick = { onStartTestSet(test) },
                             shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5)),
                             modifier = Modifier.fillMaxWidth().height(48.dp)
@@ -197,7 +235,7 @@ fun PracticeScreen(
                     .border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(20.dp))
                     .clickable {
                         if (canAccess) {
-                            onStartFreeTest()
+                            onStartTestSet(test)
                         } else {
                             onLockedFeatureClick()
                         }

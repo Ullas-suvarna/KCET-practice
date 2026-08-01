@@ -234,8 +234,12 @@ fun LeaderboardItemRow(entry: LeaderboardEntry) {
 @Composable
 fun BadgesSection(
     badges: List<BadgeItem>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onUnlockAllBadges: () -> Unit = {}
 ) {
+    val allUnlocked = badges.isNotEmpty() && badges.all { it.isUnlocked }
+    val unlockedCount = badges.count { it.isUnlocked }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -253,33 +257,126 @@ fun BadgesSection(
                     modifier = Modifier
                         .size(38.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFFF3E8FF)),
+                        .background(if (allUnlocked) Color(0xFFFEF3C7) else Color(0xFFF3E8FF)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Default.AutoAwesome,
+                        imageVector = if (allUnlocked) Icons.Default.EmojiEvents else Icons.Default.AutoAwesome,
                         contentDescription = null,
-                        tint = Color(0xFF9333EA),
+                        tint = if (allUnlocked) Color(0xFFD97706) else Color(0xFF9333EA),
                         modifier = Modifier.size(20.dp)
                     )
                 }
                 Spacer(modifier = Modifier.width(10.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Milestone Badges (${badges.count { it.isUnlocked }}/${badges.size})",
+                        text = "Milestone Badges ($unlockedCount/${badges.size})",
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF0F172A)
                     )
                     Text(
-                        text = "Unlock achievements as you attempt mock exams",
+                        text = if (allUnlocked) "🎉 100% Milestone Badges Achieved!" else "Unlock all badges for FREE KCET Premium Pro Access",
                         fontSize = 11.sp,
-                        color = Color(0xFF64748B)
+                        color = if (allUnlocked) Color(0xFF059669) else Color(0xFF64748B),
+                        fontWeight = if (allUnlocked) FontWeight.Bold else FontWeight.Normal
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
+
+            if (allUnlocked) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(
+                                    Color(0xFF4F46E5),
+                                    Color(0xFF7C3AED),
+                                    Color(0xFFD97706)
+                                )
+                            )
+                        )
+                        .padding(16.dp)
+                ) {
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("👑", fontSize = 24.sp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "CONGRATULATIONS!",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = Color(0xFFFDE68A),
+                                    letterSpacing = 1.sp
+                                )
+                                Text(
+                                    text = "Free KCET Premium Pro Unlocked! 🎉",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Text(
+                            text = "You achieved all milestone badges! Your account has been upgraded to Premium Pro for FREE with full access to:",
+                            fontSize = 12.sp,
+                            color = Color(0xFFE0E7FF),
+                            lineHeight = 16.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            RewardDetailBullet("⚡ Unlimited 180-Question Full PCM CBT Mock Test Sets")
+                            RewardDetailBullet("📖 All Solved PYQ Question Papers with Step-by-Step Keys")
+                            RewardDetailBullet("👨‍🏫 Priority Rescheduling for 1-to-1 Senior Mentorship")
+                            RewardDetailBullet("📊 AI Deep Weakness & Subject Mastery Analytics")
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color.White.copy(alpha = 0.2f)
+                        ) {
+                            Text(
+                                text = "🔥 Premium Pro Access Active & Synced to Firebase",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+            } else {
+                Button(
+                    onClick = onUnlockAllBadges,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5)),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.AutoAwesome, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "⚡ Complete All Badges & Get Free Premium",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+            }
 
             badges.chunked(2).forEach { pair ->
                 Row(
@@ -297,6 +394,87 @@ fun BadgesSection(
             }
         }
     }
+}
+
+@Composable
+private fun RewardDetailBullet(text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(Color(0xFFFDE68A))
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = text,
+            fontSize = 11.sp,
+            color = Color.White,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+@Composable
+fun BadgeRewardCongratsDialog(
+    onDismiss: () -> Unit
+) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5)),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("🎉 Start Enjoying Free Premium Access", fontWeight = FontWeight.Bold)
+            }
+        },
+        title = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                Text("👑 🥳 🏆", fontSize = 36.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "CONGRATULATIONS!",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Black,
+                    color = Color(0xFF4F46E5)
+                )
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "All Milestone Badges Achieved Completely! 🎯",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    color = Color(0xFF0F172A)
+                )
+                Text(
+                    text = "Your dedication to solving KCET mock tests has earned you a FREE LIFETIME PREMIUM PRO PASS! Here is what is unlocked for you:",
+                    fontSize = 13.sp,
+                    color = Color(0xFF475569)
+                )
+
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color(0xFFEEF2FF),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFC7D2FE)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("✨ Unlimited 180-Question Full PCM CBT Mock Papers", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF3730A3))
+                        Text("✨ Full Step-by-Step Solutions & PYQ Answer Key Access", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF3730A3))
+                        Text("✨ Free Priority Slot for 1-to-1 Senior Mentorship Chat", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF3730A3))
+                        Text("✨ Advanced Subject Mastery & Speed Analytics", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF3730A3))
+                    }
+                }
+            }
+        },
+        shape = RoundedCornerShape(24.dp),
+        containerColor = Color.White
+    )
 }
 
 @Composable

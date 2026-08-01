@@ -52,7 +52,7 @@ fun OnboardingScreen(
 ) {
     val pages = listOf(
         OnboardingPage(
-            title = "Welcome to KCET Practice Pro",
+            title = "Welcome to KCET Gen Z ⭐",
             description = "Your all-in-one companion for Karnataka CET exam preparation, CBT mock test simulations, and college seat counselling.",
             imageRes = R.drawable.img_onboarding_1_1785390544221
         ),

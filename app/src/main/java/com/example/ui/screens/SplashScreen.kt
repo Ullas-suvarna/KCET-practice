@@ -82,8 +82,8 @@ fun SplashScreen(
                 color = Color.White.copy(alpha = 0.15f)
             ) {
                 Image(
-                    painter = painterResource(id = R.drawable.img_kcet_icon_1785390517153),
-                    contentDescription = "KCET Practice Pro Logo",
+                    painter = painterResource(id = R.drawable.kcet_genz_logo_1785569849419),
+                    contentDescription = "KCET Gen Z Logo",
                     modifier = Modifier.padding(16.dp)
                 )
             }
@@ -91,7 +91,7 @@ fun SplashScreen(
             Spacer(modifier = Modifier.height(24.dp))
 
             Text(
-                text = "KCET Practice Pro",
+                text = "KCET Gen Z ⭐",
                 style = MaterialTheme.typography.headlineLarge.copy(
                     fontSize = 32.sp,
                     fontWeight = FontWeight.Bold,

@@ -107,7 +107,7 @@ fun AuthScreen(
                 color = Color.White.copy(alpha = 0.15f)
             ) {
                 Image(
-                    painter = painterResource(id = R.drawable.img_kcet_icon_1785390517153),
+                    painter = painterResource(id = R.drawable.kcet_genz_logo_1785569849419),
                     contentDescription = "Logo",
                     modifier = Modifier.padding(12.dp)
                 )
@@ -116,7 +116,7 @@ fun AuthScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "KCET Practice Pro",
+                text = "KCET Gen Z ⭐",
                 style = MaterialTheme.typography.headlineMedium.copy(
                     fontWeight = FontWeight.Bold,
                     color = Color.White
@@ -529,7 +529,7 @@ fun AuthScreen(
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "Contact:Email ullassuvarna65@gmail.com",
+                    text = "Helpline Email: KcetGenZservice@gmail.com | Insta: @ULLAS U SUVARNA",
                     color = Color.White.copy(alpha = 0.55f),
                     fontSize = 10.sp
                 )

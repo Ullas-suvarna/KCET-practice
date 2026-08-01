@@ -96,6 +96,7 @@ import java.util.Locale
 fun SeniorLiveChatScreen(
     bookings: List<SeniorChatBooking> = emptyList(),
     onBookSession: (date: String, time: String) -> Unit,
+    onRescheduleSession: (bookingId: String, date: String, time: String) -> Unit = { _, _, _ -> },
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -313,14 +314,34 @@ fun SeniorLiveChatScreen(
                     }
                 }
 
-                // If user has confirmed bookings, show Active Booking Pass Card
+                // If user has bookings, show Booking Pass Card according to Status
                 if (latestBooking != null) {
                     item {
+                        val isConfirmed = latestBooking.status == "Confirmed"
+                        val isWaiting = latestBooking.status == "Waiting for Senior Confirmation" || latestBooking.status == "Pending"
+                        val isReschedule = latestBooking.status == "Reschedule Needed" || latestBooking.status == "Choose Other Time"
+                        val isDeclined = latestBooking.status == "Declined"
+
+                        val cardBg = when {
+                            isConfirmed -> Color(0xFFF0FDF4)
+                            isWaiting -> Color(0xFFFEFCE8)
+                            isReschedule -> Color(0xFFFFF7ED)
+                            else -> Color(0xFFFEF2F2)
+                        }
+
+                        val headerColor = when {
+                            isConfirmed -> Color(0xFF16A34A)
+                            isWaiting -> Color(0xFFD97706)
+                            isReschedule -> Color(0xFFEA580C)
+                            else -> Color(0xFFDC2626)
+                        }
+
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(20.dp),
-                            colors = CardDefaults.cardColors(containerColor = Color.White),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            colors = CardDefaults.cardColors(containerColor = cardBg),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.5.dp, headerColor.copy(alpha = 0.4f))
                         ) {
                             Column(modifier = Modifier.padding(18.dp)) {
                                 Row(
@@ -330,23 +351,33 @@ fun SeniorLiveChatScreen(
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Icon(
-                                            imageVector = Icons.Default.CheckCircle,
+                                            imageVector = when {
+                                                isConfirmed -> Icons.Default.CheckCircle
+                                                isWaiting -> Icons.Default.Schedule
+                                                isReschedule -> Icons.Default.HelpOutline
+                                                else -> Icons.Default.Lock
+                                            },
                                             contentDescription = null,
-                                            tint = Color(0xFF16A34A),
-                                            modifier = Modifier.size(20.dp)
+                                            tint = headerColor,
+                                            modifier = Modifier.size(22.dp)
                                         )
-                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
                                         Text(
-                                            text = "Booking Confirmed ✅",
+                                            text = when {
+                                                isConfirmed -> "Booking Confirmed ✅"
+                                                isWaiting -> "Waiting for Senior Confirmation ⏳"
+                                                isReschedule -> "Senior Suggested Reschedule 💬"
+                                                else -> "Booking Declined ❌"
+                                            },
                                             fontWeight = FontWeight.Bold,
-                                            fontSize = 16.sp,
-                                            color = Color(0xFF16A34A)
+                                            fontSize = 15.sp,
+                                            color = headerColor
                                         )
                                     }
 
                                     Surface(
                                         shape = RoundedCornerShape(8.dp),
-                                        color = Color(0xFFF1F5F9)
+                                        color = Color.White
                                     ) {
                                         Text(
                                             text = "ID: ${latestBooking.bookingId}",
@@ -359,7 +390,7 @@ fun SeniorLiveChatScreen(
                                 }
 
                                 Spacer(modifier = Modifier.height(12.dp))
-                                Divider(color = Color(0xFFF1F5F9))
+                                Divider(color = headerColor.copy(alpha = 0.2f))
                                 Spacer(modifier = Modifier.height(12.dp))
 
                                 Row(modifier = Modifier.fillMaxWidth()) {
@@ -384,72 +415,176 @@ fun SeniorLiveChatScreen(
                                     }
                                 }
 
+                                // Status Message details
                                 Spacer(modifier = Modifier.height(12.dp))
 
-                                // QR Code Display from User's uploaded screenshot
-                                Surface(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = Color.White,
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0))
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(16.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally
+                                if (isWaiting) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(Color(0xFFFEF3C7))
+                                            .border(1.dp, Color(0xFFFCD34D), RoundedCornerShape(12.dp))
+                                            .padding(12.dp)
                                     ) {
-                                        Text(
-                                            text = "Instagram Mentor QR Code",
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 13.sp,
-                                            color = Color(0xFF334155)
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-
-                                        // Image asset displaying the uploaded Instagram QR code
-                                        Image(
-                                            painter = painterResource(id = R.drawable.img_insta_qr_1785438753192),
-                                            contentDescription = "Instagram QR Code @ULLAS_U_SUVARNA",
-                                            modifier = Modifier
-                                                .size(210.dp)
-                                                .clip(RoundedCornerShape(12.dp)),
-                                            contentScale = ContentScale.Fit
-                                        )
-
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text(
-                                            text = "@ULLAS_U_SUVARNA",
-                                            fontWeight = FontWeight.ExtraBold,
-                                            fontSize = 18.sp,
-                                            color = Color(0xFFD97706)
-                                        )
+                                        Column {
+                                            Text(
+                                                text = "⏳ Request Submitted to Senior Mentor",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp,
+                                                color = Color(0xFF92400E)
+                                            )
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "Your date (${latestBooking.selectedDate}) and time (${latestBooking.selectedTime}) request is sent to Senior Mentor (@ULLAS_U_SUVARNA). The mentor is reviewing availability and will confirm or send a message shortly!",
+                                                fontSize = 12.sp,
+                                                color = Color(0xFF78350F),
+                                                lineHeight = 17.sp
+                                            )
+                                            if (latestBooking.adminMessage.isNotBlank()) {
+                                                Spacer(modifier = Modifier.height(6.dp))
+                                                Text(
+                                                    text = "💬 Senior Note: ${latestBooking.adminMessage}",
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    fontSize = 12.sp,
+                                                    color = Color(0xFFB45309)
+                                                )
+                                            }
+                                        }
+                                    }
+                                } else if (isReschedule) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(Color(0xFFFFEDD5))
+                                            .border(1.dp, Color(0xFFFDBA74), RoundedCornerShape(12.dp))
+                                            .padding(12.dp)
+                                    ) {
+                                        Column {
+                                            Text(
+                                                text = "💬 Message from Senior Mentor:",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp,
+                                                color = Color(0xFFC2410C)
+                                            )
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = latestBooking.adminMessage.ifBlank { "Senior mentor is unavailable at this slot. Please choose another date or time slot below." },
+                                                fontSize = 12.sp,
+                                                color = Color(0xFF9A3412),
+                                                fontWeight = FontWeight.Medium,
+                                                lineHeight = 17.sp
+                                            )
+                                            Spacer(modifier = Modifier.height(6.dp))
+                                            Text(
+                                                text = "👉 Please select a new date & time slot below to re-submit your request.",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFFC2410C)
+                                            )
+                                        }
+                                    }
+                                } else if (isDeclined) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(Color(0xFFFEE2E2))
+                                            .border(1.dp, Color(0xFFFCA5A5), RoundedCornerShape(12.dp))
+                                            .padding(12.dp)
+                                    ) {
+                                        Column {
+                                            Text(
+                                                text = "❌ Booking Request Not Confirmed",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp,
+                                                color = Color(0xFFB91C1C)
+                                            )
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = latestBooking.adminMessage.ifBlank { "Senior mentor is unavailable for this slot. Please pick another slot below." },
+                                                fontSize = 12.sp,
+                                                color = Color(0xFF991B1B)
+                                            )
+                                        }
                                     }
                                 }
 
-                                Spacer(modifier = Modifier.height(14.dp))
+                                if (isConfirmed) {
+                                    // QR Code Display from User's uploaded screenshot
+                                    Surface(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(16.dp),
+                                        color = Color.White,
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0))
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(16.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Text(
+                                                text = "Instagram Mentor QR Code",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp,
+                                                color = Color(0xFF334155)
+                                            )
+                                            Spacer(modifier = Modifier.height(8.dp))
 
-                                // Instruction Box as requested
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(Color(0xFFFEF3C7))
-                                        .border(1.dp, Color(0xFFFCD34D), RoundedCornerShape(12.dp))
-                                        .padding(12.dp)
-                                ) {
-                                    Column {
-                                        Text(
-                                            text = "📌 Next Steps for Live Chat:",
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 13.sp,
-                                            color = Color(0xFF92400E)
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = "Follow Instagram handle @ULLAS_U_SUVARNA and send a direct message (DM) at your selected time (${latestBooking.selectedTime} on ${latestBooking.selectedDate}) to start your unlimited doubt clearing live chat session!",
-                                            fontSize = 12.sp,
-                                            color = Color(0xFF78350F),
-                                            lineHeight = 17.sp
-                                        )
+                                            Image(
+                                                painter = painterResource(id = R.drawable.img_insta_qr_1785438753192),
+                                                contentDescription = "Instagram QR Code @ULLAS_U_SUVARNA",
+                                                modifier = Modifier
+                                                    .size(210.dp)
+                                                    .clip(RoundedCornerShape(12.dp)),
+                                                contentScale = ContentScale.Fit
+                                            )
+
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Text(
+                                                text = "@ULLAS_U_SUVARNA",
+                                                fontWeight = FontWeight.ExtraBold,
+                                                fontSize = 18.sp,
+                                                color = Color(0xFFD97706)
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(14.dp))
+
+                                    // Instruction Box
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(Color(0xFFFEF3C7))
+                                            .border(1.dp, Color(0xFFFCD34D), RoundedCornerShape(12.dp))
+                                            .padding(12.dp)
+                                    ) {
+                                        Column {
+                                            Text(
+                                                text = "📌 Next Steps for Live Chat:",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp,
+                                                color = Color(0xFF92400E)
+                                            )
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "Follow Instagram handle @ULLAS_U_SUVARNA and send a direct message (DM) at your selected time (${latestBooking.selectedTime} on ${latestBooking.selectedDate}) to start your unlimited doubt clearing live chat session!",
+                                                fontSize = 12.sp,
+                                                color = Color(0xFF78350F),
+                                                lineHeight = 17.sp
+                                            )
+                                            if (latestBooking.adminMessage.isNotBlank()) {
+                                                Spacer(modifier = Modifier.height(6.dp))
+                                                Text(
+                                                    text = "💬 Senior Note: ${latestBooking.adminMessage}",
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 12.sp,
+                                                    color = Color(0xFF92400E)
+                                                )
+                                            }
+                                        }
                                     }
                                 }
 
@@ -480,7 +615,7 @@ fun SeniorLiveChatScreen(
                                                 color = Color(0xFF1E40AF)
                                             )
                                             Text(
-                                                text = "If anything is wrong or you need support, contact via email: kcetpracticepro9@gmail.com",
+                                                text = "Contact support via email: KcetGenZservice@gmail.com | Insta: @ULLAS U SUVARNA",
                                                 fontSize = 11.sp,
                                                 color = Color(0xFF1E3A8A)
                                             )
@@ -725,52 +860,121 @@ fun SeniorLiveChatScreen(
 
                 // Booking Button & Price Banner
                 item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A))
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                    val hasExistingBooking = latestBooking != null
+                    if (hasExistingBooking && latestBooking != null) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A))
                         ) {
-                            Column {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = "Pass Status",
+                                            fontSize = 11.sp,
+                                            color = Color.White.copy(alpha = 0.7f)
+                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = "PAID ₹50",
+                                                fontSize = 18.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = Color(0xFF4ADE80)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Surface(
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = Color(0xFF166534)
+                                            ) {
+                                                Text(
+                                                    text = "NO EXTRA FEE",
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color.White,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Button(
+                                        onClick = {
+                                            onRescheduleSession(latestBooking.bookingId, selectedDate, selectedTime)
+                                            Toast.makeText(context, "Slot updated to $selectedDate ($selectedTime) free of charge! Firebase updated.", Toast.LENGTH_LONG).show()
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                                        shape = RoundedCornerShape(12.dp),
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+                                    ) {
+                                        Text(
+                                            text = "🔄 Update Slot Free",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = "Total Session Fee",
+                                    text = "💡 Admin timing declined or changed? Pick a new slot above and click 'Update Slot Free'. You will NOT be charged money again! Data is stored permanently in Firebase.",
                                     fontSize = 11.sp,
-                                    color = Color.White.copy(alpha = 0.7f)
+                                    color = Color.White.copy(alpha = 0.85f),
+                                    lineHeight = 15.sp
                                 )
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                            }
+                        }
+                    } else {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A))
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column {
                                     Text(
-                                        text = "₹100",
-                                        fontSize = 14.sp,
-                                        color = Color.White.copy(alpha = 0.5f),
-                                        textDecoration = TextDecoration.LineThrough
+                                        text = "Total Session Fee",
+                                        fontSize = 11.sp,
+                                        color = Color.White.copy(alpha = 0.7f)
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "₹100",
+                                            fontSize = 14.sp,
+                                            color = Color.White.copy(alpha = 0.5f),
+                                            textDecoration = TextDecoration.LineThrough
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "₹50",
+                                            fontSize = 22.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = Color(0xFFFEF08A)
+                                        )
+                                    }
+                                }
+
+                                Button(
+                                    onClick = { showPaymentDialog = true },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE11D48)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
+                                ) {
                                     Text(
-                                        text = "₹50",
-                                        fontSize = 22.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        color = Color(0xFFFEF08A)
+                                        text = "Book Session (₹50)",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold
                                     )
                                 }
-                            }
-
-                            Button(
-                                onClick = { showPaymentDialog = true },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE11D48)),
-                                shape = RoundedCornerShape(12.dp),
-                                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
-                            ) {
-                                Text(
-                                    text = "Book Session (₹50)",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
                             }
                         }
                     }

@@ -178,7 +178,7 @@ object FirebaseService {
     }
 
     suspend fun saveUserProfile(profile: UserProfile): Boolean {
-        val uid = auth.currentUser?.uid ?: profile.uid.ifBlank { "guest" }
+        val uid = profile.uid.ifBlank { auth.currentUser?.uid ?: "guest" }
         val userMap = mapOf(
             "uid" to uid,
             "name" to profile.name,
@@ -189,11 +189,38 @@ object FirebaseService {
             "targetStream" to profile.targetStream,
             "registrationDate" to profile.registrationDate
         )
-        val res = firestore.collection("users").document(uid).set(userMap).awaitResult()
+        val res = firestore.collection("users").document(uid).set(userMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
         return res.isSuccess
     }
 
+    suspend fun getUserProfileOnce(uid: String): UserProfile? {
+        if (uid.isBlank()) return null
+        return try {
+            val res = firestore.collection("users").document(uid).get().awaitResult()
+            val doc = res.getOrNull()
+            if (doc != null && doc.exists()) {
+                UserProfile(
+                    uid = doc.getString("uid") ?: uid,
+                    name = doc.getString("name") ?: "Karthik Gowda",
+                    email = doc.getString("email") ?: "",
+                    photoUrl = doc.getString("photoUrl"),
+                    isPremium = doc.getBoolean("isPremium") ?: false,
+                    kcetTargetRank = doc.getString("kcetTargetRank") ?: "Under 1000",
+                    targetStream = doc.getString("targetStream") ?: "Engineering (B.E / B.Tech)",
+                    registrationDate = doc.getString("registrationDate") ?: "2026"
+                )
+            } else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun observeUserProfile(uid: String): Flow<UserProfile?> = callbackFlow {
+        if (uid.isBlank()) {
+            trySend(null)
+            awaitClose { }
+            return@callbackFlow
+        }
         val docRef = firestore.collection("users").document(uid)
         val listener = docRef.addSnapshotListener { snapshot, error ->
             if (error != null) {
@@ -287,8 +314,90 @@ object FirebaseService {
         firestore.collection("questions").document(question.id.toString()).set(docMap).awaitResult()
     }
 
+    suspend fun saveQuestionBatch(questions: List<Question>) {
+        val chunks = questions.chunked(400)
+        chunks.forEach { chunk ->
+            val batch = firestore.batch()
+            chunk.forEach { q ->
+                val docRef = firestore.collection("questions").document(q.id.toString())
+                val docMap = mapOf(
+                    "id" to q.id,
+                    "subject" to q.subject.name,
+                    "questionText" to q.questionText,
+                    "imageUrl" to (q.imageUrl ?: ""),
+                    "optionA" to q.optionA,
+                    "optionB" to q.optionB,
+                    "optionC" to q.optionC,
+                    "optionD" to q.optionD,
+                    "correctOption" to q.correctOption.name,
+                    "explanation" to q.explanation,
+                    "testSetId" to q.testSetId,
+                    "isPremium" to q.isPremium
+                )
+                batch.set(docRef, docMap)
+            }
+            batch.commit().awaitResult()
+        }
+    }
+
     suspend fun deleteQuestion(questionId: Int) {
         firestore.collection("questions").document(questionId.toString()).delete().awaitResult()
+    }
+
+    // -------------------------------------------------------------
+    // USER BOOKMARKS COLLECTION (Stored in Firebase)
+    // -------------------------------------------------------------
+    fun observeUserBookmarks(userId: String = "kcet_std_001"): Flow<List<BookmarkEntity>> = callbackFlow {
+        val query = firestore.collection("user_bookmarks").whereEqualTo("userId", userId)
+        val listener = query.addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null) {
+                trySend(emptyList())
+                return@addSnapshotListener
+            }
+            val items = snapshot.documents.mapNotNull { doc ->
+                try {
+                    BookmarkEntity(
+                        questionId = (doc.getLong("questionId") ?: doc.id.toLongOrNull() ?: 0L).toInt(),
+                        subject = doc.getString("subject") ?: "PHYSICS",
+                        questionText = doc.getString("questionText") ?: "",
+                        imageUrl = doc.getString("imageUrl"),
+                        optionA = doc.getString("optionA") ?: "",
+                        optionB = doc.getString("optionB") ?: "",
+                        optionC = doc.getString("optionC") ?: "",
+                        optionD = doc.getString("optionD") ?: "",
+                        correctOption = doc.getString("correctOption") ?: "A",
+                        explanation = doc.getString("explanation") ?: "",
+                        timestamp = doc.getLong("timestamp") ?: System.currentTimeMillis()
+                    )
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            trySend(items)
+        }
+        awaitClose { listener.remove() }
+    }
+
+    suspend fun saveUserBookmark(userId: String = "kcet_std_001", bookmark: BookmarkEntity) {
+        val docMap = mapOf(
+            "userId" to userId,
+            "questionId" to bookmark.questionId,
+            "subject" to bookmark.subject,
+            "questionText" to bookmark.questionText,
+            "imageUrl" to (bookmark.imageUrl ?: ""),
+            "optionA" to bookmark.optionA,
+            "optionB" to bookmark.optionB,
+            "optionC" to bookmark.optionC,
+            "optionD" to bookmark.optionD,
+            "correctOption" to bookmark.correctOption,
+            "explanation" to bookmark.explanation,
+            "timestamp" to bookmark.timestamp
+        )
+        firestore.collection("user_bookmarks").document("${userId}_${bookmark.questionId}").set(docMap).awaitResult()
+    }
+
+    suspend fun deleteUserBookmark(userId: String = "kcet_std_001", questionId: Int) {
+        firestore.collection("user_bookmarks").document("${userId}_${questionId}").delete().awaitResult()
     }
 
     // -------------------------------------------------------------
@@ -359,8 +468,8 @@ object FirebaseService {
     // -------------------------------------------------------------
     // 3. TEST_RESULTS COLLECTION
     // -------------------------------------------------------------
-    suspend fun saveTestResult(result: TestResultEntity) {
-        val uid = auth.currentUser?.uid ?: "guest"
+    suspend fun saveTestResult(result: TestResultEntity, userId: String = "") {
+        val uid = userId.ifBlank { auth.currentUser?.uid ?: "guest" }
         val docMap = mapOf(
             "userId" to uid,
             "testName" to result.testName,
@@ -376,8 +485,8 @@ object FirebaseService {
         firestore.collection("test_results").add(docMap).awaitResult()
     }
 
-    fun observeUserTestResults(): Flow<List<TestResultEntity>> = callbackFlow {
-        val uid = auth.currentUser?.uid ?: "guest"
+    fun observeUserTestResults(userId: String = ""): Flow<List<TestResultEntity>> = callbackFlow {
+        val uid = userId.ifBlank { auth.currentUser?.uid ?: "guest" }
         val query = firestore.collection("test_results")
             .whereEqualTo("userId", uid)
 
@@ -676,6 +785,129 @@ object FirebaseService {
         firestore.collection("rank_vs_marks").document(id).delete().awaitResult()
     }
 
+    // -------------------------------------------------------------
+    // 9. SENIOR CHAT BOOKINGS COLLECTION (Stored in Firebase)
+    // -------------------------------------------------------------
+    fun observeSeniorChatBookings(): Flow<List<SeniorChatBooking>> = callbackFlow {
+        val query = firestore.collection("senior_chat_bookings").orderBy("bookedAtTimestamp", Query.Direction.DESCENDING)
+        val listener = query.addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null) {
+                trySend(emptyList())
+                return@addSnapshotListener
+            }
+            val items = snapshot.documents.mapNotNull { doc ->
+                try {
+                    SeniorChatBooking(
+                        bookingId = doc.getString("bookingId") ?: doc.id,
+                        userId = doc.getString("userId") ?: "kcet_std_001",
+                        userName = doc.getString("userName") ?: "Karthik Gowda",
+                        userEmail = doc.getString("userEmail") ?: "student@gmail.com",
+                        selectedDate = doc.getString("selectedDate") ?: "",
+                        selectedTime = doc.getString("selectedTime") ?: "",
+                        mentorName = doc.getString("mentorName") ?: "Senior KCET Mentor (@ULLAS_U_SUVARNA)",
+                        instagramHandle = doc.getString("instagramHandle") ?: "@ULLAS_U_SUVARNA",
+                        supportEmail = doc.getString("supportEmail") ?: "kcetpracticepro9@gmail.com",
+                        amountPaid = (doc.getLong("amountPaid") ?: 50L).toInt(),
+                        bookedAtTimestamp = doc.getLong("bookedAtTimestamp") ?: System.currentTimeMillis(),
+                        status = doc.getString("status") ?: "Waiting for Senior Confirmation",
+                        adminMessage = doc.getString("adminMessage") ?: ""
+                    )
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            trySend(items)
+        }
+        awaitClose { listener.remove() }
+    }
+
+    suspend fun saveSeniorChatBooking(booking: SeniorChatBooking) {
+        val docMap = mapOf(
+            "bookingId" to booking.bookingId,
+            "userId" to booking.userId,
+            "userName" to booking.userName,
+            "userEmail" to booking.userEmail,
+            "selectedDate" to booking.selectedDate,
+            "selectedTime" to booking.selectedTime,
+            "mentorName" to booking.mentorName,
+            "instagramHandle" to booking.instagramHandle,
+            "supportEmail" to booking.supportEmail,
+            "amountPaid" to booking.amountPaid,
+            "bookedAtTimestamp" to booking.bookedAtTimestamp,
+            "status" to booking.status,
+            "adminMessage" to booking.adminMessage
+        )
+        firestore.collection("senior_chat_bookings").document(booking.bookingId).set(docMap).awaitResult()
+    }
+
+    suspend fun updateSeniorChatBookingStatus(bookingId: String, status: String, adminMessage: String) {
+        val updateMap = mapOf(
+            "status" to status,
+            "adminMessage" to adminMessage
+        )
+        firestore.collection("senior_chat_bookings").document(bookingId).update(updateMap).awaitResult()
+    }
+
+    suspend fun rescheduleSeniorChatBooking(bookingId: String, newDate: String, newTime: String) {
+        val updateMap = mapOf(
+            "selectedDate" to newDate,
+            "selectedTime" to newTime,
+            "status" to "Waiting for Senior Confirmation",
+            "adminMessage" to "Slot re-selected by student ($newDate $newTime)"
+        )
+        firestore.collection("senior_chat_bookings").document(bookingId).update(updateMap).awaitResult()
+    }
+
+    suspend fun deleteSeniorChatBooking(bookingId: String) {
+        firestore.collection("senior_chat_bookings").document(bookingId).delete().awaitResult()
+    }
+
+    // ------------------ HELPLINES FIRESTORE ------------------
+    fun observeHelplines(): Flow<List<HelplineItem>> = callbackFlow {
+        val listener = firestore.collection("helplines")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    trySend(SampleData.defaultHelplines)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null && !snapshot.isEmpty) {
+                    val list = snapshot.documents.mapNotNull { doc ->
+                        HelplineItem(
+                            id = doc.id,
+                            title = doc.getString("title") ?: "",
+                            contactValue = doc.getString("contactValue") ?: "",
+                            type = doc.getString("type") ?: "EMAIL",
+                            description = doc.getString("description") ?: "",
+                            actionUrl = doc.getString("actionUrl") ?: "",
+                            isHighlighted = doc.getBoolean("isHighlighted") ?: true
+                        )
+                    }
+                    trySend(list)
+                } else {
+                    trySend(SampleData.defaultHelplines)
+                }
+            }
+        awaitClose { listener.remove() }
+    }
+
+    suspend fun saveHelpline(item: HelplineItem) {
+        val id = item.id.ifBlank { "h_${System.currentTimeMillis()}" }
+        val docMap = mapOf(
+            "id" to id,
+            "title" to item.title,
+            "contactValue" to item.contactValue,
+            "type" to item.type,
+            "description" to item.description,
+            "actionUrl" to item.actionUrl,
+            "isHighlighted" to item.isHighlighted
+        )
+        firestore.collection("helplines").document(id).set(docMap).awaitResult()
+    }
+
+    suspend fun deleteHelpline(id: String) {
+        firestore.collection("helplines").document(id).delete().awaitResult()
+    }
+
     suspend fun seedResourcesAndAnnouncementsIfEmpty() {
         try {
             val resQuery = firestore.collection("resources").get().awaitResult()
@@ -697,8 +929,13 @@ object FirebaseService {
             if (rankQuery.isSuccess && (rankQuery.getOrNull()?.isEmpty == true)) {
                 SampleData.sampleRankVsMarks.forEach { saveRankVsMarks(it) }
             }
+
+            val helpQuery = firestore.collection("helplines").get().awaitResult()
+            if (helpQuery.isSuccess && (helpQuery.getOrNull()?.isEmpty == true)) {
+                SampleData.defaultHelplines.forEach { saveHelpline(it) }
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "Error seeding resources/announcements/important dates/rank vs marks: ${e.message}")
+            Log.e(TAG, "Error seeding resources/announcements/important dates/rank vs marks/helplines: ${e.message}")
         }
     }
 }
