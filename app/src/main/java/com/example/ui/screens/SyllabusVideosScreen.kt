@@ -3,6 +3,8 @@ package com.example.ui.screens
 import android.content.Intent
 import android.net.Uri
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.animation.AnimatedVisibility
@@ -60,11 +62,13 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -78,11 +82,14 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.layout.ContentScale
 import com.example.data.SyllabusChapter
 import com.example.data.SyllabusVideo
 import com.example.data.SyllabusVideoRepository
 import com.example.data.SubjectType
 import com.example.data.VideoCategory
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -647,6 +654,8 @@ fun VideoItemCard(
     isBookmarked: Boolean,
     onBookmarkToggle: () -> Unit
 ) {
+    val context = LocalContext.current
+
     val categoryBadgeBg = when (video.category) {
         VideoCategory.ONE_SHOT -> Color(0xFFFEF3C7)
         VideoCategory.MARATHON -> Color(0xFFFCE7F3)
@@ -673,24 +682,42 @@ fun VideoItemCard(
             modifier = Modifier.padding(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Play Button Thumbnail Mock
+            // Real YouTube Thumbnail Image with Play Overlay
             Box(
                 modifier = Modifier
-                    .size(56.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(Color(0xFFDC2626), Color(0xFF991B1B))
-                        )
-                    ),
+                    .size(width = 88.dp, height = 60.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF0F172A)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Filled.PlayArrow,
-                    contentDescription = "Play Video",
-                    tint = Color.White,
-                    modifier = Modifier.size(28.dp)
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data("https://img.youtube.com/vi/${video.youtubeVideoId}/hqdefault.jpg")
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = video.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
                 )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.25f))
+                )
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFDC2626)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.PlayArrow,
+                        contentDescription = "Play Video",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.width(10.dp))
@@ -746,7 +773,22 @@ fun VideoItemCard(
                         color = Color(0xFF64748B)
                     )
 
-                    Row {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=${video.youtubeVideoId}"))
+                                context.startActivity(intent)
+                            },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.OpenInNew,
+                                contentDescription = "Open YouTube App",
+                                tint = Color(0xFFDC2626),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
                         IconButton(
                             onClick = onBookmarkToggle,
                             modifier = Modifier.size(24.dp)
@@ -774,7 +816,7 @@ fun EmbeddedVideoPlayerDialog(
     onDismiss: () -> Unit,
     onOpenYoutube: () -> Unit
 ) {
-    var isVideoLoading by remember { mutableStateOf(true) }
+    val context = LocalContext.current
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -814,13 +856,22 @@ fun EmbeddedVideoPlayerDialog(
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = onOpenYoutube) {
+                        Button(
+                            onClick = onOpenYoutube,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE11D48)),
+                            shape = RoundedCornerShape(20.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
                             Icon(
                                 imageVector = Icons.Filled.OpenInNew,
                                 contentDescription = "Open in YouTube App",
-                                tint = Color.White
+                                tint = Color.White,
+                                modifier = Modifier.size(14.dp)
                             )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("YouTube", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         }
+                        Spacer(modifier = Modifier.width(8.dp))
                         IconButton(onClick = onDismiss) {
                             Icon(
                                 imageVector = Icons.Filled.Close,
@@ -835,26 +886,43 @@ fun EmbeddedVideoPlayerDialog(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(250.dp)
+                        .height(260.dp)
                         .background(Color.Black),
                     contentAlignment = Alignment.Center
                 ) {
                     AndroidView(
                         factory = { ctx ->
                             WebView(ctx).apply {
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = true
-                                settings.mediaPlaybackRequiresUserGesture = false
-                                settings.loadWithOverviewMode = true
-                                settings.useWideViewPort = true
-                                settings.allowFileAccess = true
-                                settings.allowContentAccess = true
+                                setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+
+                                settings.apply {
+                                    javaScriptEnabled = true
+                                    domStorageEnabled = true
+                                    databaseEnabled = true
+                                    mediaPlaybackRequiresUserGesture = false
+                                    loadWithOverviewMode = true
+                                    useWideViewPort = true
+                                    allowFileAccess = true
+                                    allowContentAccess = true
+                                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                    userAgentString = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
+                                }
 
                                 webChromeClient = WebChromeClient()
+
                                 webViewClient = object : WebViewClient() {
-                                    override fun onPageFinished(view: WebView?, url: String?) {
-                                        super.onPageFinished(view, url)
-                                        isVideoLoading = false
+                                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                        val url = request?.url?.toString()
+                                        if (url != null && (url.contains("youtube.com/watch") || url.contains("youtu.be"))) {
+                                            try {
+                                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                                ctx.startActivity(intent)
+                                                return true
+                                            } catch (e: Exception) {
+                                                // Fallback
+                                            }
+                                        }
+                                        return false
                                     }
                                 }
 
@@ -864,15 +932,15 @@ fun EmbeddedVideoPlayerDialog(
                                     <head>
                                         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
                                         <style>
-                                            * { margin: 0; padding: 0; box-sizing: border-box; }
-                                            body, html { width: 100%; height: 100%; background-color: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; }
+                                            * { margin: 0; padding: 0; box-sizing: border-box; background-color: #000; }
+                                            body, html { width: 100%; height: 100%; overflow: hidden; display: flex; justify-content: center; align-items: center; }
                                             .video-container { position: relative; width: 100%; height: 100%; }
                                             iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0; }
                                         </style>
                                     </head>
                                     <body>
                                         <div class="video-container">
-                                            <iframe src="https://www.youtube.com/embed/${video.youtubeVideoId}?autoplay=1&playsinline=1&enablejsapi=1&rel=0&modestbranding=1" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+                                            <iframe src="https://www.youtube-nocookie.com/embed/${video.youtubeVideoId}?autoplay=1&playsinline=1&enablejsapi=1&rel=0&modestbranding=1&controls=1" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
                                         </div>
                                     </body>
                                     </html>
@@ -883,26 +951,55 @@ fun EmbeddedVideoPlayerDialog(
                         },
                         modifier = Modifier.fillMaxSize()
                     )
+                }
 
-                    if (isVideoLoading) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.85f))
-                        ) {
-                            CircularProgressIndicator(
-                                color = Color(0xFFE11D48),
-                                strokeWidth = 3.dp,
-                                modifier = Modifier.size(36.dp)
-                            )
-                            Spacer(modifier = Modifier.height(10.dp))
+                // Direct YouTube Launch Banner Bar
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color(0xFF1E293B)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Loading YouTube Video...",
-                                color = Color.White,
+                                text = "▶ Stream in YouTube App",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "HD quality, subtitles & playback speed controls",
+                                fontSize = 11.sp,
+                                color = Color(0xFF94A3B8)
+                            )
+                        }
+
+                        Button(
+                            onClick = {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=${video.youtubeVideoId}"))
+                                context.startActivity(intent)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE11D48)),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.OpenInNew,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(14.dp)
+                                )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Open App",
                                 fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
                             )
                         }
                     }

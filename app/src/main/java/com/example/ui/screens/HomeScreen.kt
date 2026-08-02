@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Star
@@ -346,32 +347,39 @@ fun HomeScreen(
                         }
                     }
 
-                    // Avatar Circle
-                    val initials = userProfile.name.split(" ").mapNotNull { it.firstOrNull()?.uppercase() }.take(2).joinToString("")
-                    Box(
-                        modifier = Modifier
-                            .size(46.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(
-                                Brush.linearGradient(
-                                    colors = listOf(Color(0xFF6366F1), Color(0xFFA855F7))
-                                )
-                            )
-                            .padding(2.dp),
-                        contentAlignment = Alignment.Center
+                    // Profile Tab Button (Top Right Corner - High Visibility)
+                    Surface(
+                        onClick = { onNavigateTab(BottomTab.PROFILE) },
+                        shape = RoundedCornerShape(22.dp),
+                        color = Color(0xFF4F46E5), // Bold Vivid Indigo
+                        shadowElevation = 6.dp,
+                        modifier = Modifier.padding(start = 2.dp)
                     ) {
-                        Box(
+                        Row(
                             modifier = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(Color(0xFFEEF2FF)),
-                            contentAlignment = Alignment.Center
+                                .padding(horizontal = 12.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(26.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.White.copy(alpha = 0.25f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Person,
+                                    contentDescription = "Profile",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
                             Text(
-                                text = if (initials.isNotEmpty()) initials else "AP",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF4F46E5)
+                                text = "Profile",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color.White
                             )
                         }
                     }
