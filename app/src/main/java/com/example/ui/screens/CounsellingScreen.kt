@@ -4,12 +4,15 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,18 +29,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.AssignmentTurnedIn
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FolderShared
 import androidx.compose.material.icons.filled.FormatListNumbered
 import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.OpenInNew
-import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Rule
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.VerifiedUser
-import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -48,6 +50,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,26 +67,42 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.CounsellingStep
 import com.example.data.ImportantDateItem
-import com.example.data.PdfDownloadHelper
 import com.example.data.ResourceItem
 import com.example.data.SampleData
-import com.example.ui.components.PdfViewerDialog
 import kotlinx.coroutines.launch
-import java.io.File
+
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 
 @Composable
 fun CounsellingScreen(
     resources: List<ResourceItem> = emptyList(),
     importantDates: List<ImportantDateItem> = emptyList(),
+    isSyncing: Boolean = false,
+    lastSyncedDateStr: String = "Today, August 08, 2026",
+    onSyncKeaSchedule: (() -> Unit)? = null,
     onOpenSeniorChat: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var activePdfDialog by remember { mutableStateOf<Pair<ResourceItem, File>?>(null) }
-    var downloadingId by remember { mutableStateOf<String?>(null) }
+    var selectedFilter by remember { mutableStateOf("All") }
+
+    // Auto-trigger Gemini AI KEA schedule sync when opening Counselling Guide
+    LaunchedEffect(Unit) {
+        if (importantDates.isEmpty()) {
+            onSyncKeaSchedule?.invoke()
+        }
+    }
 
     val steps = SampleData.counsellingSteps
     val faqs = SampleData.counsellingFaqs
+
+    val filteredDates = remember(importantDates, selectedFilter) {
+        if (selectedFilter == "All") importantDates
+        else importantDates.filter { it.status.equals(selectedFilter, ignoreCase = true) }
+    }
 
     val roadmapPdfs = remember(resources) {
         val list = resources.filter {
@@ -100,21 +119,22 @@ fun CounsellingScreen(
         }
     }
 
-    val openOrDownloadPdf: (ResourceItem) -> Unit = { item ->
-        scope.launch {
-            val pdfFile = PdfDownloadHelper.getPdfFile(context, item.id)
-            if (PdfDownloadHelper.isPdfDownloaded(context, item.id)) {
-                activePdfDialog = Pair(item, pdfFile)
+    val openExternalLink: (String) -> Unit = { url ->
+        if (url.isBlank()) {
+            Toast.makeText(context, "No link provided for this resource.", Toast.LENGTH_SHORT).show()
+        } else {
+            val formattedUrl = if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                "https://$url"
             } else {
-                Toast.makeText(context, "Opening Roadmap PDF: ${item.title}...", Toast.LENGTH_SHORT).show()
-                downloadingId = item.id
-                val result = PdfDownloadHelper.downloadPdf(context, item)
-                downloadingId = null
-                if (result.isSuccess) {
-                    activePdfDialog = Pair(item, result.getOrNull()!!)
-                } else {
-                    Toast.makeText(context, "Could not load PDF: ${result.exceptionOrNull()?.message}", Toast.LENGTH_SHORT).show()
+                url
+            }
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(formattedUrl)).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                Toast.makeText(context, "Could not open external link: ${e.localizedMessage ?: "Invalid URL"}", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -151,7 +171,7 @@ fun CounsellingScreen(
                 )
             }
 
-            // KCET Counselling Events Roadmap PDF Documents Section
+            // KCET Counselling Events Roadmap & Resources (External Links)
             item {
                 Box(
                     modifier = Modifier
@@ -169,21 +189,21 @@ fun CounsellingScreen(
                         ) {
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = Color(0xFFE11D48)
+                                color = Color(0xFF4F46E5)
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.PictureAsPdf,
+                                        imageVector = Icons.Default.Link,
                                         contentDescription = null,
                                         tint = Color.White,
                                         modifier = Modifier.size(14.dp)
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
-                                        text = "OFFICIAL PDF ROADMAP",
+                                        text = "OFFICIAL LINKS & DRIVE",
                                         color = Color.White,
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold
@@ -196,7 +216,7 @@ fun CounsellingScreen(
                                 color = Color(0xFFDCFCE7)
                             ) {
                                 Text(
-                                    text = "Admin Managed • ${roadmapPdfs.size} PDFs",
+                                    text = "Admin Managed • ${roadmapPdfs.size} Resources",
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color(0xFF15803D),
@@ -208,7 +228,7 @@ fun CounsellingScreen(
                         Spacer(modifier = Modifier.height(10.dp))
 
                         Text(
-                            text = "KCET Counselling Events Roadmap PDF",
+                            text = "KCET Counselling Official Resources & Roadmap",
                             fontSize = 18.sp,
                             fontWeight = FontWeight.ExtraBold,
                             color = Color(0xFF1E1B4B)
@@ -217,18 +237,22 @@ fun CounsellingScreen(
                         Spacer(modifier = Modifier.height(4.dp))
 
                         Text(
-                            text = "Complete step-by-step official PDF documents uploaded and controlled live by Admin. View, download, or open offline.",
+                            text = "Official step-by-step guidance, document verification flowcharts, and guidelines uploaded to Google Drive & external links by Admin.",
                             fontSize = 12.sp,
                             color = Color(0xFF475569)
                         )
 
                         Spacer(modifier = Modifier.height(14.dp))
 
-                        roadmapPdfs.forEach { pdfItem ->
+                        roadmapPdfs.forEach { resItem ->
+                            val isDrive = resItem.downloadUrl.contains("drive.google.com", ignoreCase = true) ||
+                                          resItem.downloadUrl.contains("docs.google.com", ignoreCase = true)
+
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
+                                    .padding(vertical = 4.dp)
+                                    .clickable { openExternalLink(resItem.downloadUrl) },
                                 shape = RoundedCornerShape(16.dp),
                                 colors = CardDefaults.cardColors(containerColor = Color.White),
                                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -240,14 +264,14 @@ fun CounsellingScreen(
                                     ) {
                                         Surface(
                                             shape = RoundedCornerShape(10.dp),
-                                            color = Color(0xFFFFE4E6),
+                                            color = if (isDrive) Color(0xFFE0F2FE) else Color(0xFFEEF2FF),
                                             modifier = Modifier.size(42.dp)
                                         ) {
                                             Box(contentAlignment = Alignment.Center) {
                                                 Icon(
-                                                    imageVector = Icons.Default.PictureAsPdf,
+                                                    imageVector = if (isDrive) Icons.Default.FolderShared else Icons.Default.Link,
                                                     contentDescription = null,
-                                                    tint = Color(0xFFE11D48),
+                                                    tint = if (isDrive) Color(0xFF0284C7) else Color(0xFF4F46E5),
                                                     modifier = Modifier.size(22.dp)
                                                 )
                                             }
@@ -257,25 +281,25 @@ fun CounsellingScreen(
 
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
-                                                text = pdfItem.title,
+                                                text = resItem.title,
                                                 fontSize = 14.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = Color(0xFF0F172A)
                                             )
                                             Spacer(modifier = Modifier.height(2.dp))
                                             Text(
-                                                text = "${pdfItem.yearOrSubject} • Size: ${pdfItem.fileSize}",
+                                                text = if (isDrive) "${resItem.yearOrSubject} • Google Drive Link" else "${resItem.yearOrSubject} • External Link",
                                                 fontSize = 11.sp,
                                                 fontWeight = FontWeight.SemiBold,
-                                                color = Color(0xFF4F46E5)
+                                                color = if (isDrive) Color(0xFF0284C7) else Color(0xFF4F46E5)
                                             )
                                         }
                                     }
 
-                                    if (pdfItem.description.isNotBlank()) {
+                                    if (resItem.description.isNotBlank()) {
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text(
-                                            text = pdfItem.description,
+                                            text = resItem.description,
                                             fontSize = 12.sp,
                                             color = Color(0xFF64748B),
                                             lineHeight = 16.sp
@@ -284,57 +308,25 @@ fun CounsellingScreen(
 
                                     Spacer(modifier = Modifier.height(12.dp))
 
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    Button(
+                                        onClick = { openExternalLink(resItem.downloadUrl) },
+                                        modifier = Modifier.fillMaxWidth().height(40.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isDrive) Color(0xFF0284C7) else Color(0xFF4F46E5)
+                                        ),
+                                        shape = RoundedCornerShape(10.dp)
                                     ) {
-                                        Button(
-                                            onClick = { openOrDownloadPdf(pdfItem) },
-                                            modifier = Modifier.weight(1f),
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5)),
-                                            shape = RoundedCornerShape(10.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Visibility,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text(
-                                                text = if (downloadingId == pdfItem.id) "Loading..." else "Read PDF Roadmap",
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-
-                                        OutlinedButton(
-                                            onClick = {
-                                                if (pdfItem.downloadUrl.isNotBlank() && (pdfItem.downloadUrl.startsWith("http://") || pdfItem.downloadUrl.startsWith("https://"))) {
-                                                    try {
-                                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(pdfItem.downloadUrl))
-                                                        context.startActivity(intent)
-                                                    } catch (e: Exception) {
-                                                        Toast.makeText(context, "Opening PDF Roadmap...", Toast.LENGTH_SHORT).show()
-                                                        openOrDownloadPdf(pdfItem)
-                                                    }
-                                                } else {
-                                                    openOrDownloadPdf(pdfItem)
-                                                }
-                                            },
-                                            modifier = Modifier.weight(0.9f),
-                                            shape = RoundedCornerShape(10.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.OpenInNew,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text(
-                                                text = "External Link",
-                                                fontSize = 11.sp
-                                            )
-                                        }
+                                        Icon(
+                                            imageVector = Icons.Default.OpenInNew,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = if (isDrive) "Open in Google Drive" else "Open External Link",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     }
                                 }
                             }
@@ -392,7 +384,7 @@ fun CounsellingScreen(
                     Spacer(modifier = Modifier.height(4.dp))
 
                     Text(
-                        text = "Book date & time for live Instagram chat with KCET Senior Mentor @ULLAS_U_SUVARNA.",
+                        text = "Book date & time for 1-on-1 live chat with an assigned KCET Senior Mentor.",
                         fontSize = 12.sp,
                         color = Color(0xFFCBD5E1)
                     )
@@ -411,22 +403,152 @@ fun CounsellingScreen(
             }
         }
 
-        // Dynamic Firebase Schedule Section
-        if (importantDates.isNotEmpty()) {
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(imageVector = Icons.Default.Event, contentDescription = null, tint = Color(0xFF4F46E5), modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
+        // Dynamic KEA Schedule & Gemini AI Auto-Sync Section
+        item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xFFF8FAFC))
+                    .border(1.5.dp, Color(0xFF6366F1), RoundedCornerShape(20.dp))
+                    .padding(16.dp)
+            ) {
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFF6366F1)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Sync,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "GEMINI LIVE AUTO-SYNC",
+                                        color = Color.White,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = Color(0xFFDCFCE7),
+                            border = BorderStroke(1.dp, Color(0xFF86EFAC))
+                        ) {
+                            Text(
+                                text = "📅 $lastSyncedDateStr",
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF15803D),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
                     Text(
-                        text = "Official Important Dates & Schedule",
+                        text = "Official KEA Counselling Schedule & Timelines",
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF0F172A)
                     )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Text(
+                        text = "Live dates, document verification, secret key issuance & option entry rounds from cetonline.karnataka.gov.in. Updated automatically via Gemini AI.",
+                        fontSize = 12.sp,
+                        color = Color(0xFF64748B),
+                        lineHeight = 16.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(
+                            onClick = { onSyncKeaSchedule?.invoke() },
+                            enabled = !isSyncing,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            if (isSyncing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    color = Color.White,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Syncing with Gemini...", fontSize = 12.sp)
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Sync,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Sync Live KEA Schedule", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Filter Chips for Schedule Statuses
+                    @OptIn(ExperimentalLayoutApi::class)
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        val filters = listOf("All", "Active Now", "Upcoming", "Crucial", "Completed")
+                        filters.forEach { filterName ->
+                            val isSelected = selectedFilter == filterName
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { selectedFilter = filterName },
+                                label = {
+                                    Text(
+                                        text = filterName,
+                                        fontSize = 10.5.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Color(0xFF4F46E5),
+                                    selectedLabelColor = Color.White,
+                                    containerColor = Color(0xFFF1F5F9),
+                                    labelColor = Color(0xFF475569)
+                                )
+                            )
+                        }
+                    }
                 }
             }
+        }
 
-            items(importantDates) { dateItem ->
+        // Render Filtered Schedule Items
+        if (filteredDates.isNotEmpty()) {
+            items(filteredDates) { dateItem ->
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -539,14 +661,6 @@ fun CounsellingScreen(
         }
 
         item { Spacer(modifier = Modifier.height(20.dp)) }
-    }
-
-    if (activePdfDialog != null) {
-        PdfViewerDialog(
-            resource = activePdfDialog!!.first,
-            pdfFile = activePdfDialog!!.second,
-            onDismiss = { activePdfDialog = null }
-        )
     }
 }
 }

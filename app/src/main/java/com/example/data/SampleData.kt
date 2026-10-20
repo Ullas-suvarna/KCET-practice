@@ -430,66 +430,75 @@ object SampleData {
         ),
         ImportantDateItem(
             id = "d2",
-            eventTitle = "KEA Hall Ticket / Admit Card Download",
-            dateOrDeadline = "April 05, 2026",
+            eventTitle = "KEA Hall Ticket & KCET Examination",
+            dateOrDeadline = "April 18 - April 19, 2026",
             status = "Completed",
-            description = "Download official KCET admission ticket with test center details & guidelines.",
-            category = "Admit Card",
+            description = "State Entrance Examination across 500+ test centers in Karnataka.",
+            category = "Exam",
             isHighlighted = false
         ),
         ImportantDateItem(
             id = "d3",
-            eventTitle = "KCET 2026 Examination (Physics, Chem, Math, Bio)",
-            dateOrDeadline = "April 18 - April 19, 2026",
-            status = "Completed",
-            description = "CBT / OMR State Entrance Examination across 500+ test centers in Karnataka.",
-            category = "Exam",
-            isHighlighted = true
-        ),
-        ImportantDateItem(
-            id = "d4",
-            eventTitle = "Provisional Answer Key Release & Objections",
-            dateOrDeadline = "April 25 - April 28, 2026",
-            status = "Completed",
-            description = "Verify official answer keys and raise challenges with supporting documents.",
-            category = "Results",
-            isHighlighted = false
-        ),
-        ImportantDateItem(
-            id = "d5",
-            eventTitle = "KCET Ranks & Scorecard Declaration",
+            eventTitle = "KCET Official Ranks & Scorecard Declaration",
             dateOrDeadline = "May 20, 2026",
             status = "Completed",
             description = "Publication of Engineering, Agri, Vet, and Pharmacy merit ranks.",
             category = "Results",
-            isHighlighted = true
+            isHighlighted = false
         ),
         ImportantDateItem(
             id = "d6",
             eventTitle = "KEA Document Verification & Secret Key Issuance",
-            dateOrDeadline = "June 05 - June 20, 2026",
-            status = "Active Now",
-            description = "Physical/Online document verification at nodal centers & secret key generation.",
+            dateOrDeadline = "June 10 - June 28, 2026",
+            status = "Completed",
+            description = "Physical & online document verification at nodal centers. Downloaded official verification slip & 16-digit Secret Key.",
             category = "Counselling",
-            isHighlighted = true
+            isHighlighted = false
         ),
         ImportantDateItem(
             id = "d7",
-            eventTitle = "Mock Option Entry & Cutoff Publication",
-            dateOrDeadline = "July 02 - July 08, 2026",
-            status = "Upcoming",
-            description = "Trial option entry round to evaluate seat allotment chances based on previous cutoffs.",
+            eventTitle = "KCET Round 1 Option Entry & Seat Allotment",
+            dateOrDeadline = "July 05 - July 25, 2026",
+            status = "Completed",
+            description = "Choice locking, Choice 2 / Choice 3 selection, fee payment, and college admission reporting for Round 1.",
+            category = "Counselling",
+            isHighlighted = false
+        ),
+        ImportantDateItem(
+            id = "d8",
+            eventTitle = "KEA UGCET 2026 Second Round Option Entry & Choice Modification",
+            dateOrDeadline = "August 05 - August 14, 2026",
+            status = "Active Now",
+            description = "Active now on official KEA portal cetonline.karnataka.gov.in. Candidates holding Choice 2 or Choice 3 can add, delete, or re-order preferred college options for 2nd Round seat allotment.",
             category = "Counselling",
             isHighlighted = true
         ),
         ImportantDateItem(
-            id = "d8",
-            eventTitle = "Round 1 Real Option Entry & Seat Allotment",
-            dateOrDeadline = "July 12 - July 20, 2026",
-            status = "Upcoming",
-            description = "Locking college/branch preferences for official Round 1 seat allotment.",
+            id = "d9",
+            eventTitle = "KEA UGCET 2026 Second Round Official Seat Allotment Result",
+            dateOrDeadline = "August 18, 2026",
+            status = "Crucial",
+            description = "Publication of UGCET 2nd Round seat allotment result. Check upgraded college seat, download bank challan, and make choice decisions.",
             category = "Counselling",
             isHighlighted = true
+        ),
+        ImportantDateItem(
+            id = "d10",
+            eventTitle = "Round 2 Fee Payment & Admission Order Download",
+            dateOrDeadline = "August 19 - August 24, 2026",
+            status = "Upcoming",
+            description = "Challan generation, online/bank fee payment, admission order download, and reporting to newly allotted college.",
+            category = "Counselling",
+            isHighlighted = false
+        ),
+        ImportantDateItem(
+            id = "d11",
+            eventTitle = "Mop-Up / Second Round Extension Counseling",
+            dateOrDeadline = "August 28, 2026 Onwards",
+            status = "Upcoming",
+            description = "Final round for vacant engineering & farm science seats across government and private institutes.",
+            category = "Counselling",
+            isHighlighted = false
         )
     )
 
@@ -509,6 +518,13 @@ object SampleData {
 
     val sampleTestSeriesSets = listOf(
         TestSeriesSet("ts_1", "KCET Grand Sample CBT Test 1", "Free Mock Test", 20, 20, isPremium = false, description = "Physics, Chemistry & Mathematics combined entrance paper with full answer key."),
+        
+        // Premium Real KCET Subject Templates (60 Qs / 80 Mins / OMR Hall Ticket Filling)
+        TestSeriesSet("ts_phy_real", "KCET Real Template: Physics (60 Qs)", "Subject Real Templates", 60, 80, isPremium = true, description = "Official 60-Question KCET Physics Paper with authentic 80-minute timing, version code, and OMR candidate filling."),
+        TestSeriesSet("ts_chem_real", "KCET Real Template: Chemistry (60 Qs)", "Subject Real Templates", 60, 80, isPremium = true, description = "Official 60-Question KCET Chemistry Paper with authentic 80-minute timing, version code, and OMR candidate filling."),
+        TestSeriesSet("ts_math_real", "KCET Real Template: Mathematics (60 Qs)", "Subject Real Templates", 60, 80, isPremium = true, description = "Official 60-Question KCET Mathematics Paper with authentic 80-minute timing, version code, and OMR candidate filling."),
+        TestSeriesSet("ts_bio_real", "KCET Real Template: Biology (60 Qs)", "Subject Real Templates", 60, 80, isPremium = true, description = "Official 60-Question KCET Biology Paper with authentic 80-minute timing, version code, and OMR candidate filling."),
+
         TestSeriesSet("ts_2", "KCET Full Mock Test 2 (PCM)", "Full Mock Tests", 180, 180, isPremium = true, description = "Comprehensive 180-question full syllabus mock exam for PCM."),
         TestSeriesSet("ts_3", "KCET Full Mock Test 3 (PCB)", "Full Mock Tests", 180, 180, isPremium = true, description = "180-question mock exam focusing on Physics, Chemistry & Biology."),
         TestSeriesSet("ts_4", "KCET 2025 Official Solved Paper", "Previous Year Papers", 180, 180, isPremium = true, description = "Official previous year paper with detailed step-by-step solutions."),
@@ -523,6 +539,163 @@ object SampleData {
         val list = mutableListOf<Question>()
         val setHash = kotlin.math.abs(testSetId.hashCode()).let { if (it == Int.MIN_VALUE) 1000 else it }
         val baseId = (setHash % 10000) * 200 + 100
+
+        // Handle Subject-Specific Real Template Papers (60 Qs each)
+        if (testSetId == "ts_phy_real") {
+            val phyTopics = listOf(
+                "Centripetal Acceleration in Uniform Circular Motion" to "a_c = v²/R directed towards the center.",
+                "Dimensional Formula for Universal Gravitational Constant G" to "[M⁻¹ L³ T⁻²] derived from F = G m1 m2 / r².",
+                "Electric Dipole Torque in Uniform Electric Field" to "τ = p × E with magnitude pE sin θ.",
+                "Stretching Wire Resistance Change (Volume Constant)" to "L' = 2L => A' = A/2 => R' = 4R.",
+                "Work Done Rotating Magnetic Dipole through 180°" to "W = -MB(cos 180° - cos 0°) = 2MB.",
+                "Photoelectric Effect Stopping Potential" to "e V0 = h ν - W. Doubling ν increases V0 by > 2x.",
+                "Equivalent Focal Length of Convex & Concave Lens Combination" to "1/F = 1/f1 + 1/f2 = 1/20 - 1/10 = -1/20 => F = -20 cm.",
+                "Self Inductance of Long Solenoid" to "L = μ0 N² A / l.",
+                "De Broglie Wavelength of Electron Accelerated by V Volts" to "λ = 1.227 / √V nm = h / √(2m eV).",
+                "Transformer Step-Up Voltage and Current Ratio" to "Vs / Vp = Ns / Np = Ip / Is.",
+                "Capacitor with Dielectric Medium Insertion" to "C' = K C_0; Potential decreases to V0/K if isolated.",
+                "LCR Series Resonance Frequency Formula" to "f_r = 1 / (2π √(LC)). At resonance Z = R.",
+                "Electromagnetic Wave Velocity in Free Space" to "c = 1 / √(μ0 ε0) = E_0 / B_0.",
+                "Young's Double Slit Fringe Width Formula" to "β = λ D / d.",
+                "Bohr Atomic Model Radius Ratio" to "r_n ∝ n² / Z."
+            )
+            for (i in 1..60) {
+                val topic = phyTopics[(i - 1) % phyTopics.size]
+                list.add(
+                    Question(
+                        id = baseId + i,
+                        subject = Subject.PHYSICS,
+                        questionText = "[KCET Physics PYQ $i/60] Topic: ${topic.first}\nWhich of the following statements/formulas accurately represents the physical principle?",
+                        optionA = "A) Standard conceptual definition statement #$i",
+                        optionB = "B) ${topic.second}",
+                        optionC = "C) Inverse proportional relationship expression",
+                        optionD = "D) Zero magnitude under all equilibrium conditions",
+                        correctOption = Option.B,
+                        explanation = "Step-by-Step KCET Solution Q$i:\n1. Topic: ${topic.first}\n2. Core Physics Formula/Law: ${topic.second}\n3. Applying KCET standard physical principles confirms Option B.",
+                        testSetId = testSetId,
+                        isPremium = true
+                    )
+                )
+            }
+            return list
+        }
+
+        if (testSetId == "ts_chem_real") {
+            val chemTopics = listOf(
+                "Optical Isomerism in Lactic Acid" to "Lactic acid has 1 chiral carbon attached to -H, -OH, -CH3, -COOH.",
+                "Oxidation State of Manganese in KMnO4" to "Mn is in +7 oxidation state.",
+                "Reaction of Ethanol with Metallic Sodium" to "2 C2H5OH + 2 Na -> 2 C2H5ONa + H2(g).",
+                "Catalyst in Haber Process for Ammonia Synthesis" to "Finely divided Iron (Fe) with Molybdenum (Mo) promoter.",
+                "Faraday First Law of Electrolysis" to "Mass deposited m = Z Q = Z I t.",
+                "Monomers of Terylene (Dacron)" to "Ethylene Glycol and Terephthalic Acid.",
+                "Geometry of XeF4 Molecule via VSEPR" to "XeF4 has 4 bond pairs and 2 lone pairs -> Square Planar.",
+                "Nernst Equation for Electrode Potential" to "E = E° - (0.0591/n) log [Product]/[Reactant].",
+                "Units of Rate Constant for First Order Reaction" to "Units = s⁻¹ or min⁻¹.",
+                "Coordination Number of Iron in K4[Fe(CN)6]" to "Coordination number = 6, Oxidation state = +2.",
+                "Aldol Condensation Requirement" to "Requires presence of α-hydrogen atom in carbonyl compound.",
+                "Aromaticity Requirement (Hückel's Rule)" to "Planar cyclic system with (4n+2) π electrons.",
+                "pH of Buffer Solution (Henderson-Hasselbalch)" to "pH = pKa + log([Salt]/[Acid]).",
+                "Cannizzaro Reaction Condition" to "Aldehydes lacking α-hydrogen atom undergo self oxidation-reduction with conc. KOH.",
+                "Colligative Property Depending solely on Number of Solute Particles" to "Osmotic Pressure π = i C R T."
+            )
+            for (i in 1..60) {
+                val topic = chemTopics[(i - 1) % chemTopics.size]
+                list.add(
+                    Question(
+                        id = baseId + i,
+                        subject = Subject.CHEMISTRY,
+                        questionText = "[KCET Chemistry PYQ $i/60] Topic: ${topic.first}\nIdentify the correct chemical reaction / structural principle:",
+                        optionA = "A) Unstable intermediate complex #$i",
+                        optionB = "B) ${topic.second}",
+                        optionC = "C) Non-spontaneous reaction product state",
+                        optionD = "D) Inert non-reactive mixture state",
+                        correctOption = Option.B,
+                        explanation = "Step-by-Step KCET Solution Q$i:\n1. Topic: ${topic.first}\n2. Chemical Mechanism/Rule: ${topic.second}\n3. Evaluating organic/inorganic mechanism confirms Option B.",
+                        testSetId = testSetId,
+                        isPremium = true
+                    )
+                )
+            }
+            return list
+        }
+
+        if (testSetId == "ts_math_real") {
+            val mathTopics = listOf(
+                "Determinant of Adjugate Matrix |adj(A)|" to "|adj(A)| = |A|^(n-1). For n=3 and |A|=5, |adj(A)| = 25.",
+                "Standard Trigonometric Limit sin(5x)/x" to "lim(x->0) sin(5x)/x = 5.",
+                "Derivative of Exponential Function e^(x²)" to "d/dx (e^(x²)) = 2x e^(x²).",
+                "Definite Integral ∫_0^(π/2) sin²(x) dx" to "By King's Property, ∫_0^(π/2) sin²x dx = π/4.",
+                "Perpendicular Distance between Parallel Planes" to "d = |D2 - D1| / √(A² + B² + C²).",
+                "Probability of getting a sum of 8 with 2 fair dice" to "Favorable outcomes (2,6),(3,5),(4,4),(5,3),(6,2) => 5/36.",
+                "Condition for Perpendicular Vectors a and b" to "Vector dot product a · b = 0.",
+                "Order and Degree of Differential Equation" to "Order is highest derivative order, degree is power of highest derivative.",
+                "Sum of n terms of an AP" to "Sn = n/2 [2a + (n-1)d].",
+                "Area bounded by curve y = x² from x=0 to x=1" to "∫_0^1 x² dx = [x³/3]_0^1 = 1/3 square units.",
+                "Inverse Trigonometric Identity sin⁻¹(x) + cos⁻¹(x)" to "Equal to π/2 for x ∈ [-1, 1].",
+                "Continuity of f(x) at x = a" to "lim(x->a) f(x) = f(a).",
+                "Equation of Tangent to Curve y = f(x) at (x1, y1)" to "y - y1 = m (x - x1) where m = dy/dx at (x1, y1).",
+                "Vector Cross Product Magnitude |a × b|" to "|a × b| = |a| |b| sin θ.",
+                "General Solution of Differential Equation dy/dx = y/x" to "y = c x."
+            )
+            for (i in 1..60) {
+                val topic = mathTopics[(i - 1) % mathTopics.size]
+                list.add(
+                    Question(
+                        id = baseId + i,
+                        subject = Subject.MATHEMATICS,
+                        questionText = "[KCET Mathematics PYQ $i/60] Topic: ${topic.first}\nCalculate the exact mathematical value / identity result:",
+                        optionA = "A) Computational error value #$i",
+                        optionB = "B) ${topic.second}",
+                        optionC = "C) Zero identity value",
+                        optionD = "D) Undefined value",
+                        correctOption = Option.B,
+                        explanation = "Step-by-Step KCET Solution Q$i:\n1. Topic: ${topic.first}\n2. Formula / Method: ${topic.second}\n3. Applying calculus/algebra principles yields Option B.",
+                        testSetId = testSetId,
+                        isPremium = true
+                    )
+                )
+            }
+            return list
+        }
+
+        if (testSetId == "ts_bio_real") {
+            val bioTopics = listOf(
+                "DNA Double Helix Model by Watson & Crick" to "Backbone formed by sugar-phosphate, bases held by H-bonds (A=T, G≡C).",
+                "Site of Light Reaction in Chloroplast" to "Thylakoid membranes / Grana of chloroplast.",
+                "Energy Currency of Cell" to "Adenosine Triphosphate (ATP) generated in mitochondria.",
+                "Mendel Monohybrid Cross F2 Phenotypic Ratio" to "3:1 (Dominant : Recessive). Genotypic ratio 1:2:1.",
+                "Powerhouse of Cell" to "Mitochondria responsible for cellular respiration and ATP synthesis.",
+                "Plant Hormone Responsible for Fruit Ripening" to "Ethylene gas hormone.",
+                "Process of Water Movement in Plants against Gravity" to "Transpiration Pull and Cohesion-Tension theory.",
+                "Double Fertilization in Angiosperms" to "Syngamy (zygote formation) + Triple Fusion (endosperm formation).",
+                "Primary Function of Stomata in Leaves" to "Gas exchange (CO2/O2) and transpiration control.",
+                "Master Endocrine Gland in Human Body" to "Pituitary Gland controlled by Hypothalamus.",
+                "Start Codon in Genetic Code" to "AUG (codes for Methionine).",
+                "Restricting Enzymes in Recombinant DNA Technology" to "Restriction Endonucleases cut DNA at specific palindromic sequences.",
+                "Phloem Transport Mechanism" to "Pressure Flow / Mass Flow Hypothesis.",
+                "Immune System Antibodies Structure" to "Y-shaped protein made of 2 heavy and 2 light chains (H2L2).",
+                "Ecological Pyramid that is Always Upright" to "Pyramid of Energy is always upright."
+            )
+            for (i in 1..60) {
+                val topic = bioTopics[(i - 1) % bioTopics.size]
+                list.add(
+                    Question(
+                        id = baseId + i,
+                        subject = Subject.BIOLOGY,
+                        questionText = "[KCET Biology PYQ $i/60] Topic: ${topic.first}\nWhich statement accurately describes the biological mechanism/structure?",
+                        optionA = "A) Standard botanical misconception statement",
+                        optionB = "B) ${topic.second}",
+                        optionC = "C) Non-functional cellular byproduct",
+                        optionD = "D) Inactive enzyme precursor state",
+                        correctOption = Option.B,
+                        explanation = "Step-by-Step KCET Solution Q$i:\n1. Topic: ${topic.first}\n2. Biological Concept: ${topic.second}\n3. Evaluating NCERT & KCET syllabus confirms Option B is correct.",
+                        testSetId = testSetId,
+                        isPremium = true
+                    )
+                )
+            }
+            return list
+        }
 
         // Physics 60 Questions (1 to 60)
         val physicsTopics = listOf(
@@ -644,11 +817,220 @@ object SampleData {
         HelplineItem(
             id = "h2",
             title = "Official Instagram",
-            contactValue = "@ULLAS U SUVARNA",
+            contactValue = "@ULLAS_U_SUVARNA",
             type = "INSTAGRAM",
-            description = "Follow & DM @ULLAS U SUVARNA on Instagram for live KCET updates, counseling guidance & direct mentorship.",
+            description = "Follow & DM @ULLAS_U_SUVARNA on Instagram for live KCET updates, counseling guidance & direct mentorship.",
             actionUrl = "https://instagram.com/ullassuvarna65",
             isHighlighted = true
+        )
+    )
+
+    val defaultStudents = listOf(
+        UserProfile(
+            uid = "kcet_std_001",
+            name = "Karthik Gowda",
+            email = "karthik.kcet2026@gmail.com",
+            isPremium = true,
+            kcetTargetRank = "Under 500 (Top 1% Engineering)",
+            targetStream = "Computer Science & AI (CSE)",
+            registrationDate = "15 Aug 2026",
+            isForceLoggedOut = false,
+            isBlocked = false,
+            studentId = "KCET-000001",
+            password = "karthik123"
+        ),
+        UserProfile(
+            uid = "kcet_std_002",
+            name = "Ananya Rao",
+            email = "ananya.rao.bangalore@gmail.com",
+            isPremium = true,
+            kcetTargetRank = "Under 1000 (Top Tech Tier)",
+            targetStream = "Information Science & Engg (ISE)",
+            registrationDate = "18 Aug 2026",
+            isForceLoggedOut = false,
+            isBlocked = false,
+            studentId = "KCET-000002",
+            password = "ananya@kcet"
+        ),
+        UserProfile(
+            uid = "kcet_std_003",
+            name = "Praveen Kumar",
+            email = "praveen.k.mysuru@gmail.com",
+            isPremium = false,
+            kcetTargetRank = "Under 2500",
+            targetStream = "Electronics & Communication (ECE)",
+            registrationDate = "20 Aug 2026",
+            isForceLoggedOut = false,
+            isBlocked = false,
+            studentId = "KCET-000003",
+            password = "praveen2026"
+        ),
+        UserProfile(
+            uid = "kcet_std_004",
+            name = "Sneha Patil",
+            email = "sneha.patil.hubli@gmail.com",
+            isPremium = true,
+            kcetTargetRank = "Under 150 (State Rank Achiever)",
+            targetStream = "Artificial Intelligence & Data Science",
+            registrationDate = "22 Aug 2026",
+            isForceLoggedOut = false,
+            isBlocked = false,
+            studentId = "KCET-000004",
+            password = "sneha@123"
+        ),
+        UserProfile(
+            uid = "kcet_std_005",
+            name = "Rahul Hegde",
+            email = "rahul.hegde.mangaluru@gmail.com",
+            isPremium = false,
+            kcetTargetRank = "Under 3500",
+            targetStream = "Mechanical Engineering (Mechatronics)",
+            registrationDate = "25 Aug 2026",
+            isForceLoggedOut = false,
+            isBlocked = false,
+            studentId = "KCET-000005",
+            password = "rahul2026"
+        ),
+        UserProfile(
+            uid = "kcet_std_006",
+            name = "Meghana K",
+            email = "meghana.k.tumkur@gmail.com",
+            isPremium = false,
+            kcetTargetRank = "Under 1800",
+            targetStream = "Biotechnology / Agri Engineering",
+            registrationDate = "28 Aug 2026",
+            isForceLoggedOut = false,
+            isBlocked = false,
+            studentId = "KCET-000006",
+            password = "meghana@123"
+        )
+    )
+
+    val defaultStudentTestResults = listOf(
+        AdminTestResultItem(
+            docId = "res_001",
+            userId = "kcet_std_001",
+            userName = "Karthik Gowda",
+            userEmail = "karthik.kcet2026@gmail.com",
+            studentId = "KCET-000001",
+            testName = "KCET Real Mock CBT 1",
+            timestamp = System.currentTimeMillis() - 86400000L,
+            totalQuestions = 60,
+            score = 54,
+            correctCount = 54,
+            wrongCount = 6,
+            unansweredCount = 0,
+            timeTakenSeconds = 4200,
+            percentage = 90.0f
+        ),
+        AdminTestResultItem(
+            docId = "res_001_2",
+            userId = "kcet_std_001",
+            userName = "Karthik Gowda",
+            userEmail = "karthik.kcet2026@gmail.com",
+            studentId = "KCET-000001",
+            testName = "Physics Mechanics High-Yield CBT",
+            timestamp = System.currentTimeMillis() - 43200000L,
+            totalQuestions = 40,
+            score = 38,
+            correctCount = 38,
+            wrongCount = 2,
+            unansweredCount = 0,
+            timeTakenSeconds = 2400,
+            percentage = 95.0f
+        ),
+        AdminTestResultItem(
+            docId = "res_002",
+            userId = "kcet_std_002",
+            userName = "Ananya Rao",
+            userEmail = "ananya.rao.bangalore@gmail.com",
+            studentId = "KCET-000002",
+            testName = "Physics Mechanics High-Yield CBT",
+            timestamp = System.currentTimeMillis() - 172800000L,
+            totalQuestions = 40,
+            score = 36,
+            correctCount = 36,
+            wrongCount = 4,
+            unansweredCount = 0,
+            timeTakenSeconds = 2700,
+            percentage = 90.0f
+        ),
+        AdminTestResultItem(
+            docId = "res_003",
+            userId = "kcet_std_004",
+            userName = "Sneha Patil",
+            userEmail = "sneha.patil.hubli@gmail.com",
+            studentId = "KCET-000004",
+            testName = "Complete Full Length KCET Grand Mock",
+            timestamp = System.currentTimeMillis() - 43200000L,
+            totalQuestions = 180,
+            score = 168,
+            correctCount = 168,
+            wrongCount = 12,
+            unansweredCount = 0,
+            timeTakenSeconds = 10200,
+            percentage = 93.3f
+        ),
+        AdminTestResultItem(
+            docId = "res_004",
+            userId = "kcet_std_003",
+            userName = "Praveen Kumar",
+            userEmail = "praveen.k.mysuru@gmail.com",
+            studentId = "KCET-000003",
+            testName = "Chemistry Organic High-Yield CBT",
+            timestamp = System.currentTimeMillis() - 259200000L,
+            totalQuestions = 50,
+            score = 38,
+            correctCount = 38,
+            wrongCount = 12,
+            unansweredCount = 0,
+            timeTakenSeconds = 3000,
+            percentage = 76.0f
+        ),
+        AdminTestResultItem(
+            docId = "res_005",
+            userId = "kcet_std_005",
+            userName = "Rahul Hegde",
+            userEmail = "rahul.hegde.mangaluru@gmail.com",
+            studentId = "KCET-000005",
+            testName = "Mathematics Calculus Mock",
+            timestamp = System.currentTimeMillis() - 345600000L,
+            totalQuestions = 60,
+            score = 42,
+            correctCount = 42,
+            wrongCount = 18,
+            unansweredCount = 0,
+            timeTakenSeconds = 3600,
+            percentage = 70.0f
+        ),
+        AdminTestResultItem(
+            docId = "res_006",
+            userId = "kcet_std_006",
+            userName = "Meghana K",
+            userEmail = "meghana.k.tumkur@gmail.com",
+            studentId = "KCET-000006",
+            testName = "Biology Botany Quick Practice",
+            timestamp = System.currentTimeMillis() - 518400000L,
+            totalQuestions = 30,
+            score = 25,
+            correctCount = 25,
+            wrongCount = 5,
+            unansweredCount = 0,
+            timeTakenSeconds = 1800,
+            percentage = 83.3f
+        )
+    )
+
+    val defaultNotifications = listOf(
+        StudentNotification(
+            id = "notif_welcome",
+            title = "🎉 Welcome to KCET GenZ Hub 2026!",
+            message = "Your complete KCET preparation dashboard is live. Access 1-on-1 Senior Mentorship, AI Doubt Solver, and Mock Tests.",
+            timestamp = "Just now",
+            type = "SYSTEM",
+            isRead = false,
+            actionType = "NAV_PRACTICE",
+            targetUserId = "ALL"
         )
     )
 }

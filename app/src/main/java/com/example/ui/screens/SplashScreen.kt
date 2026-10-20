@@ -57,15 +57,7 @@ fun SplashScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF1E1B4B),
-                        Color(0xFF312E81),
-                        Color(0xFF4C1D95)
-                    )
-                )
-            ),
+            .background(Color.White),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -79,7 +71,9 @@ fun SplashScreen(
                     .scale(scale.value)
                     .alpha(alpha.value),
                 shape = CircleShape,
-                color = Color.White.copy(alpha = 0.15f)
+                color = Color(0xFFF8FAFC),
+                shadowElevation = 6.dp,
+                border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFE2E8F0))
             ) {
                 Image(
                     painter = painterResource(id = R.drawable.kcet_genz_logo_1785569849419),
@@ -95,7 +89,7 @@ fun SplashScreen(
                 style = MaterialTheme.typography.headlineLarge.copy(
                     fontSize = 32.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White
+                    color = Color(0xFF0F172A)
                 ),
                 modifier = Modifier.alpha(alpha.value)
             )
@@ -105,7 +99,7 @@ fun SplashScreen(
             Text(
                 text = "Real CBT Mock Exams & Counselling Guide",
                 style = MaterialTheme.typography.bodyLarge.copy(
-                    color = Color.White.copy(alpha = 0.8f)
+                    color = Color(0xFF64748B)
                 ),
                 modifier = Modifier.alpha(alpha.value)
             )
@@ -113,7 +107,7 @@ fun SplashScreen(
             Spacer(modifier = Modifier.height(48.dp))
 
             CircularProgressIndicator(
-                color = Color(0xFFA78BFA),
+                color = Color(0xFF4F46E5),
                 strokeWidth = 3.dp,
                 modifier = Modifier
                     .size(36.dp)

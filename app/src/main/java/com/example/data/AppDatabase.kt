@@ -21,8 +21,23 @@ interface TestResultDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertResult(result: TestResultEntity): Long
 
+    @Query("SELECT * FROM test_results WHERE attemptId = :attemptId AND attemptId != '' LIMIT 1")
+    suspend fun getResultByAttemptId(attemptId: String): TestResultEntity?
+
+    @Query("SELECT * FROM test_results WHERE testName = :testName AND timestamp = :timestamp AND score = :score LIMIT 1")
+    suspend fun findExactDuplicate(testName: String, timestamp: Long, score: Int): TestResultEntity?
+
+    @Query("SELECT * FROM test_results WHERE testName = :testName AND score = :score AND totalQuestions = :totalQuestions AND timestamp >= :minTimestamp AND timestamp <= :maxTimestamp LIMIT 1")
+    suspend fun findRecentDuplicate(testName: String, score: Int, totalQuestions: Int, minTimestamp: Long, maxTimestamp: Long): TestResultEntity?
+
+    @Query("SELECT * FROM test_results")
+    suspend fun getAllResultsList(): List<TestResultEntity>
+
     @Query("DELETE FROM test_results")
     suspend fun clearHistory()
+
+    @Query("DELETE FROM test_results WHERE id = :id")
+    suspend fun deleteResultById(id: Int)
 }
 
 @Dao
@@ -40,7 +55,7 @@ interface BookmarkDao {
     fun isBookmarked(questionId: Int): Flow<Boolean>
 }
 
-@Database(entities = [TestResultEntity::class, BookmarkEntity::class], version = 2, exportSchema = false)
+@Database(entities = [TestResultEntity::class, BookmarkEntity::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun testResultDao(): TestResultDao
     abstract fun bookmarkDao(): BookmarkDao
@@ -49,13 +64,19 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
+        val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE test_results ADD COLUMN attemptId TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "kcet_practice_db"
-                ).fallbackToDestructiveMigration().build()
+                ).addMigrations(MIGRATION_2_3).fallbackToDestructiveMigration().build()
                 INSTANCE = instance
                 instance
             }

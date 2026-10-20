@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -184,37 +186,89 @@ fun ResultScreen(
 
         // Earned XP Gamification Reward Card
         item {
-            val earnedPoints = (result.score * 15) + 50 + (if ((result.timeTakenSeconds / result.totalQuestions) < 40) 25 else 0)
+            val qCount = result.totalQuestions.coerceAtLeast(1)
+            val attempted = result.correctCount + result.wrongCount
+            val attemptedRatio = (attempted.toFloat() / qCount).coerceIn(0f, 1f)
+            val isQualified = attemptedRatio > 0.5f
+
+            val baseCorrectXP = maxOf(0, result.correctCount) * 15
+            val completionBonus = (50f * attemptedRatio).toInt()
+            val speedPerQ = if (qCount > 0) (result.timeTakenSeconds / qCount).toInt() else 60
+            val speedBonus = if (speedPerQ < 40) (25f * attemptedRatio).toInt() else 0
+
+            val earnedXP = if (isQualified) (baseCorrectXP + completionBonus + speedBonus).coerceAtLeast(0) else 0
+
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF3C7))
+                colors = CardDefaults.cardColors(containerColor = if (earnedXP > 0) Color(0xFFDCFCE7) else Color(0xFFFEF2F2))
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("⚡", fontSize = 28.sp)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text("+$earnedPoints Gamification XP Earned!", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color(0xFFB45309))
-                            Text("Points added to your Statewide Leaderboard rank", fontSize = 11.sp, color = Color(0xFFD97706))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(if (earnedXP > 0) "⚡" else "⚠️", fontSize = 28.sp)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = if (earnedXP > 0) "+$earnedXP Gamification XP Earned!" else "0 XP Earned (Attempted <= 50%)",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    color = if (earnedXP > 0) Color(0xFF15803D) else Color(0xFFB91C1C)
+                                )
+                                Text(
+                                    text = if (earnedXP > 0) "Points added to your Statewide Leaderboard rank" else "Attempt >50% of questions in any test to earn XP",
+                                    fontSize = 11.sp,
+                                    color = if (earnedXP > 0) Color(0xFF166534) else Color(0xFF991B1B)
+                                )
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (earnedXP > 0) Color(0xFF16A34A) else Color(0xFFDC2626)
+                        ) {
+                            Text(
+                                text = if (earnedXP > 0) "CLAIMED" else "NO XP",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
                         }
                     }
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = Color(0xFFD97706)
-                    ) {
+
+                    if (earnedXP > 0) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(8.dp),
+                                horizontalArrangement = Arrangement.SpaceAround
+                            ) {
+                                Text("• Correct: +$baseCorrectXP XP", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF15803D))
+                                Text("• Completion: +$completionBonus XP", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF047857))
+                                if (speedBonus > 0) {
+                                    Text("• Speed: +$speedBonus XP", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF1D4ED8))
+                                }
+                            }
+                        }
+                    } else {
                         Text(
-                            text = "CLAIMED",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            text = "💡 Tip: You attempted $attempted out of $qCount questions (${(attemptedRatio * 100).toInt()}%). Attempt more than 50% of questions in any test (Mock, DPP, Chapterwise, Free, PYQ) to earn Gamification XP!",
+                            fontSize = 11.sp,
+                            color = Color(0xFF7F1D1D)
                         )
                     }
                 }
@@ -361,6 +415,19 @@ fun ResultScreen(
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold
                         )
+
+                        if (!q.imageUrl.isNullOrBlank()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            coil.compose.AsyncImage(
+                                model = q.imageUrl,
+                                contentDescription = "Question Image",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 240.dp)
+                                    .clip(RoundedCornerShape(8.dp)),
+                                contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                            )
+                        }
 
                         Spacer(modifier = Modifier.height(10.dp))
 

@@ -7,6 +7,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -495,6 +497,19 @@ fun BookmarkedQuestionCard(
                 color = Color(0xFF0F172A),
                 lineHeight = 22.sp
             )
+
+            if (!bookmark.imageUrl.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                coil.compose.AsyncImage(
+                    model = bookmark.imageUrl,
+                    contentDescription = "Question Image",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 240.dp)
+                        .clip(RoundedCornerShape(8.dp)),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                )
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
 
