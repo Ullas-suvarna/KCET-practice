@@ -907,6 +907,14 @@ fun AuthScreen(
                                     if (loginId.contains("@")) {
                                         // Admin check
                                         if (loginId == "ullassuvarna65@gmail.com") {
+                                            val sessionPrefs = context.getSharedPreferences("user_session", android.content.Context.MODE_PRIVATE)
+                                            sessionPrefs.edit()
+                                                .putBoolean("is_logged_in", true)
+                                                .putBoolean("is_admin", true)
+                                                .putString("user_email", "ullassuvarna65@gmail.com")
+                                                .putString("user_uid", "admin_ullas")
+                                                .putString("user_name", "KCET Admin")
+                                                .apply()
                                             isLoading = false
                                             authErrorMessage = null
                                             authSuccessMessage = null

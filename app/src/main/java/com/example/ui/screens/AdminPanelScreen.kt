@@ -372,6 +372,14 @@ private fun AdminScreenScope.AdminPanelContent() {
     }
 
     var isPinVerified by remember { mutableStateOf(isSessionAdmin) }
+    LaunchedEffect(Unit) {
+        val currentIsAdmin = sessionPrefs.getBoolean("is_admin", false) ||
+            sessionPrefs.getString("user_email", "")?.trim()?.equals("ullassuvarna65@gmail.com", ignoreCase = true) == true ||
+            sessionPrefs.getString("user_uid", "") == "admin_ullas"
+        if (currentIsAdmin) {
+            isPinVerified = true
+        }
+    }
     var adminIdInput by remember { mutableStateOf("ullassuvarna65@gmail.com") }
     var enteredPasswordOrPin by remember { mutableStateOf("") }
     var pinErrorMessage by remember { mutableStateOf<String?>(null) }
@@ -7363,6 +7371,7 @@ private fun AdminScreenScope.AdminPanelContent() {
                     }
                 }
             }
+        }
 
 
     val currentSelectedCollege = selectedCollegeForCutoff
@@ -7696,8 +7705,9 @@ private fun AdminScreenScope.AdminPanelContent() {
     // -------------------------------------------------------------
     // BLOCK STUDENT WITH REASON DIALOG
     // -------------------------------------------------------------
-    if (showBlockStudentDialog && studentToBlock != null) {
-        val targetStudent = studentToBlock!!
+    val currentStudentToBlock = studentToBlock
+    if (showBlockStudentDialog && currentStudentToBlock != null) {
+        val targetStudent = currentStudentToBlock
         val commonReasons = listOf(
             "Violation of mock test rules",
             "Suspicious multi-device login activity",
@@ -7978,8 +7988,9 @@ private fun AdminScreenScope.AdminPanelContent() {
         )
     }
 
-    if (showDeleteStudentDialog && studentToDeletePermanently != null) {
-        val student = studentToDeletePermanently!!
+    val currentStudentToDelete = studentToDeletePermanently
+    if (showDeleteStudentDialog && currentStudentToDelete != null) {
+        val student = currentStudentToDelete
         androidx.compose.material3.AlertDialog(
             onDismissRequest = {
                 showDeleteStudentDialog = false
@@ -8119,8 +8130,8 @@ private fun AdminScreenScope.AdminPanelContent() {
                                 imeAction = ImeAction.Done
                             ),
                             supportingText = {
-                                if (deletePinError != null) {
-                                    Text(deletePinError!!, color = Color.Red, fontSize = 10.sp)
+                                deletePinError?.let {
+                                    Text(it, color = Color.Red, fontSize = 10.sp)
                                 }
                             },
                             leadingIcon = {
@@ -8167,8 +8178,9 @@ private fun AdminScreenScope.AdminPanelContent() {
         )
     }
 
-    if (notificationToDeletePermanently != null) {
-        val notif = notificationToDeletePermanently!!
+    val currentNotifToDelete = notificationToDeletePermanently
+    if (currentNotifToDelete != null) {
+        val notif = currentNotifToDelete
         AlertDialog(
             onDismissRequest = { notificationToDeletePermanently = null },
             icon = {
@@ -8506,8 +8518,9 @@ private fun AdminScreenScope.AdminPanelContent() {
         }
 
         // Direct Push Notification Dialog for a specific Student
-        if (showDirectStudentNotifDialog && directNotifStudent != null) {
-            val student = directNotifStudent!!
+        val currentDirectStudent = directNotifStudent
+        if (showDirectStudentNotifDialog && currentDirectStudent != null) {
+            val student = currentDirectStudent
             AlertDialog(
                 onDismissRequest = { showDirectStudentNotifDialog = false },
                 title = {
@@ -9469,8 +9482,9 @@ private fun AdminScreenScope.AdminPanelContent() {
     // ==============================================================
     // DIALOG: Add Question Directly to Specific Test Series Set
     // ==============================================================
-    if (selectedSetForAddQuestion != null) {
-        val targetSet = selectedSetForAddQuestion!!
+    val currentSetForAdd = selectedSetForAddQuestion
+    if (currentSetForAdd != null) {
+        val targetSet = currentSetForAdd
         AlertDialog(
             onDismissRequest = { selectedSetForAddQuestion = null },
             title = {
@@ -9659,8 +9673,9 @@ private fun AdminScreenScope.AdminPanelContent() {
     // ==============================================================
     // DIALOG: View & Manage Questions for Specific Test Series Set
     // ==============================================================
-    if (selectedSetForViewQuestions != null) {
-        val targetSet = selectedSetForViewQuestions!!
+    val currentSetForView = selectedSetForViewQuestions
+    if (currentSetForView != null) {
+        val targetSet = currentSetForView
         val setQuestions = questions.filter { it.testSetId == targetSet.id }
 
         AlertDialog(
@@ -10143,8 +10158,9 @@ private fun AdminScreenScope.AdminPanelContent() {
         }
     }
 
-    if (selectedBookingForReceipt != null) {
-        val booking = selectedBookingForReceipt!!
+    val currentBookingForReceipt = selectedBookingForReceipt
+    if (currentBookingForReceipt != null) {
+        val booking = currentBookingForReceipt
         val matchingReceipt = paymentReceipts.find { 
             (booking.userId.isNotBlank() && it.userId == booking.userId) ||
             (booking.userEmail.isNotBlank() && it.userEmail.equals(booking.userEmail, ignoreCase = true)) ||
@@ -10331,8 +10347,9 @@ private fun AdminScreenScope.AdminPanelContent() {
                     }
                 }
             }
-        }
     }
+}
+}
 }
 
 
@@ -10639,8 +10656,9 @@ fun Admin1v1ChallengeControlCenter(
     }
 
     // Pause Dialog
-    if (challengeToPause != null) {
-        val ch = challengeToPause!!
+    val currentChallengeToPause = challengeToPause
+    if (currentChallengeToPause != null) {
+        val ch = currentChallengeToPause
         AlertDialog(
             onDismissRequest = { challengeToPause = null },
             title = { Text("⏸ Pause Challenge Timer", fontWeight = FontWeight.Bold) },
@@ -10675,8 +10693,9 @@ fun Admin1v1ChallengeControlCenter(
     }
 
     // Terminate Dialog
-    if (challengeToTerminate != null) {
-        val ch = challengeToTerminate!!
+    val currentChallengeToTerminate = challengeToTerminate
+    if (currentChallengeToTerminate != null) {
+        val ch = currentChallengeToTerminate
         AlertDialog(
             onDismissRequest = { challengeToTerminate = null },
             title = { Text("🚫 Terminate Challenge", fontWeight = FontWeight.Bold, color = Color(0xFFDC2626)) },
@@ -10711,8 +10730,9 @@ fun Admin1v1ChallengeControlCenter(
     }
 
     // Challenge Details / Result Dialog
-    if (selectedChallengeForDetails != null) {
-        val ch = selectedChallengeForDetails!!
+    val currentChallengeForDetails = selectedChallengeForDetails
+    if (currentChallengeForDetails != null) {
+        val ch = currentChallengeForDetails
         val qSet = com.example.data.ChallengeService.getQuestionSetById(ch.questionSetId)
         val questions = qSet?.questions ?: emptyList()
         var adminExpandedQId by remember { mutableStateOf<Int?>(null) }
@@ -10857,6 +10877,8 @@ fun Admin1v1ChallengeControlCenter(
             }
         }
     }
+}
+
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun AdminChallengeCard(

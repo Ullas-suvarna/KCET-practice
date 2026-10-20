@@ -1254,7 +1254,7 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
 
     fun loginAdmin() {
         _isLoggedIn.value = true
-        // resetNavigation(Screen.ADMIN, BottomTab.HOME) // Removed to prevent potential re-entrancy
+        resetNavigation(Screen.ADMIN, BottomTab.HOME)
         saveSession("admin_ullas", "ullassuvarna65@gmail.com", "KCET Admin", isAdmin = true, authMethod = "Admin Portal")
         _userProfile.value = _userProfile.value.copy(
             uid = "admin_ullas",

@@ -289,6 +289,7 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
                         },
                         onAdminLoginSuccess = {
                             viewModel.loginAdmin()
+                            viewModel.resetNavigation(Screen.ADMIN)
                         },
                         blockedAlert = blockedAlert,
                         onDismissBlockedAlert = {

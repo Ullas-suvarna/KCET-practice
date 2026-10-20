@@ -166,13 +166,6 @@ object FirebaseRealtimeService {
     // .write: auth != null && newData.child('senderId').val() === auth.uid
     // ==========================================
     fun observeSeniorChatMessages(chatId: String): Flow<List<SeniorChatMessage>> = callbackFlow {
-        if (auth.currentUser == null) {
-            Log.d(TAG, "Unauthenticated user, skipping senior chat messages observe")
-            trySend(emptyList())
-            close()
-            return@callbackFlow
-        }
-
         val cleanChatId = chatId.replace(".", "_").replace("#", "_").replace("$", "_").replace("[", "_").replace("]", "_")
         val messagesRef = database.getReference("seniorChats/$cleanChatId/messages")
 
@@ -675,13 +668,6 @@ object FirebaseRealtimeService {
     // 5. 1-to-1 CHATS (Node: /oneToOneChats/$bookingId/messages)
     // ==========================================
     fun observeOneToOneChat(bookingId: String): Flow<List<OneToOneMessage>> = callbackFlow {
-        if (auth.currentUser == null) {
-            Log.d(TAG, "Unauthenticated user, skipping 1-to-1 chat observe")
-            trySend(emptyList())
-            close()
-            return@callbackFlow
-        }
-
         val chatRef = database.getReference("oneToOneChats").child(bookingId).child("messages")
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
