@@ -181,8 +181,7 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
     private val sessionPrefs: android.content.SharedPreferences = app.getSharedPreferences("kcet_session_v2", android.content.Context.MODE_PRIVATE)
 
     // Gamification & Points State
-    private val _quitPenaltiesXP = MutableStateFlow(0)
-    val quitPenaltiesXP: StateFlow<Int> = _quitPenaltiesXP.asStateFlow()
+
 
     private val _userPoints = MutableStateFlow(sessionPrefs.getInt("user_xp", 0))
     val userPoints: StateFlow<Int> = _userPoints.asStateFlow()
@@ -619,6 +618,33 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         )
     }
 
+    fun linkEmailPasswordToGoogleUser(email: String, password: String, onResult: (Boolean, String) -> Unit) {
+        val user = FirebaseService.auth.currentUser
+        if (user == null) {
+            onResult(false, "No user logged in.")
+            return
+        }
+
+        val credential = com.google.firebase.auth.EmailAuthProvider.getCredential(email, password)
+        
+        viewModelScope.launch {
+            try {
+                user.linkWithCredential(credential).addOnCompleteListener { task ->
+                    if (task.isSuccessful) {
+                        viewModelScope.launch {
+                            FirebaseService.updateUserPasswordInFirestore(email, password)
+                        }
+                        onResult(true, "Password linked successfully!")
+                    } else {
+                        onResult(false, "Failed to link password: ${task.exception?.message}")
+                    }
+                }
+            } catch (e: Exception) {
+                onResult(false, "Error: ${e.message}")
+            }
+        }
+    }
+
     fun deleteNotification(id: String) {
         val updated = _permanentlyDeletedNotificationIds.value + id
         _permanentlyDeletedNotificationIds.value = updated
@@ -667,23 +693,19 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         val authUid = FirebaseAuth.getInstance().currentUser?.uid.orEmpty().trim()
         val profileUid = profile.uid.trim()
 
-        if (userEmail == "ullassuvarna85@gmail.com" || authEmail == "ullassuvarna85@gmail.com" || userEmail == "ullassuvarna65@gmail.com" || authEmail == "ullassuvarna65@gmail.com") {
-            bookings
-        } else {
-            bookings.filter { booking ->
-                val bUserId = booking.userId.trim()
-                val bUserEmail = booking.userEmail.trim().lowercase()
+        bookings.filter { booking ->
+            val bUserId = booking.userId.trim()
+            val bUserEmail = booking.userEmail.trim().lowercase()
 
-                val matchesUid = (profileUid.isNotBlank() && bUserId.isNotBlank() && bUserId.equals(profileUid, ignoreCase = true)) ||
-                                 (authUid.isNotBlank() && bUserId.isNotBlank() && bUserId.equals(authUid, ignoreCase = true)) ||
-                                 (bUserId.isNotBlank() && (userEmail.isNotBlank() && bUserId.equals(userEmail, ignoreCase = true) || authEmail.isNotBlank() && bUserId.equals(authEmail, ignoreCase = true)))
+            val matchesUid = (profileUid.isNotBlank() && bUserId.isNotBlank() && bUserId.equals(profileUid, ignoreCase = true)) ||
+                             (authUid.isNotBlank() && bUserId.isNotBlank() && bUserId.equals(authUid, ignoreCase = true)) ||
+                             (bUserId.isNotBlank() && (userEmail.isNotBlank() && bUserId.equals(userEmail, ignoreCase = true) || authEmail.isNotBlank() && bUserId.equals(authEmail, ignoreCase = true)))
 
-                val matchesEmail = (userEmail.isNotBlank() && bUserEmail.isNotBlank() && bUserEmail.equals(userEmail, ignoreCase = true)) ||
-                                   (authEmail.isNotBlank() && bUserEmail.isNotBlank() && bUserEmail.equals(authEmail, ignoreCase = true)) ||
-                                   (bUserEmail.isNotBlank() && (profileUid.isNotBlank() && bUserEmail.equals(profileUid, ignoreCase = true) || authUid.isNotBlank() && bUserEmail.equals(authUid, ignoreCase = true)))
+            val matchesEmail = (userEmail.isNotBlank() && bUserEmail.isNotBlank() && bUserEmail.equals(userEmail, ignoreCase = true)) ||
+                               (authEmail.isNotBlank() && bUserEmail.isNotBlank() && bUserEmail.equals(authEmail, ignoreCase = true)) ||
+                               (bUserEmail.isNotBlank() && (profileUid.isNotBlank() && bUserEmail.equals(profileUid, ignoreCase = true) || authUid.isNotBlank() && bUserEmail.equals(authUid, ignoreCase = true)))
 
-                matchesUid || matchesEmail
-            }
+            matchesUid || matchesEmail
         }
     }.stateIn(
         scope = viewModelScope,
@@ -884,8 +906,7 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
                     val totalQs = uniqueResults.sumOf { it.totalQuestions }
                     val calculatedAcc = if (totalQs > 0) (totalCorrect.toFloat() / totalQs) * 100f else 0f
                     val earnedFromTests = uniqueResults.sumOf { res -> calculateEarnedXP(res) }
-                    val netXP = (earnedFromTests - _quitPenaltiesXP.value).coerceAtLeast(0)
-                    val finalXP = maxOf(_userPoints.value, netXP)
+                    val finalXP = maxOf(_userPoints.value, earnedFromTests)
                     _userPoints.value = finalXP
                     val uid = _userProfile.value.uid
                     if (uid.isNotBlank()) {
@@ -1273,7 +1294,7 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         resetNavigation(Screen.AUTH, BottomTab.HOME)
         viewModelScope.launch {
             repository.clearTestHistory()
-            _quitPenaltiesXP.value = 0
+
             _userPoints.value = 0
             _userBadges.value = defaultLockedBadges
             _analyticsSummary.value = cleanDefaultAnalytics
@@ -2382,6 +2403,7 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         if (res.testName.contains("Challenge", ignoreCase = true) || res.testName.contains("1v1", ignoreCase = true)) {
             return 0
         }
+        if (res.isQuit) return -50
         val qCount = res.totalQuestions.coerceAtLeast(1)
         val attempted = res.correctCount + res.wrongCount
         val attemptedRatio = (attempted.toFloat() / qCount).coerceIn(0f, 1f)
@@ -2432,7 +2454,7 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
     fun clearAllTestHistory() {
         viewModelScope.launch {
             repository.clearTestHistory()
-            _quitPenaltiesXP.value = 0
+
             _userPoints.value = 0
             _analyticsSummary.value = cleanDefaultAnalytics
             updateLeaderboard()
@@ -2512,19 +2534,17 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
             wrongCount = wrong,
             unansweredCount = unanswered,
             timeTakenSeconds = timeSpentSeconds.coerceAtLeast(1).toLong(),
-            percentage = percentage
+            percentage = percentage,
+            isQuit = true
         )
 
         viewModelScope.launch {
             repository.saveTestResult(result, _userProfile.value)
         }
 
-        _quitPenaltiesXP.value = _quitPenaltiesXP.value + penaltyXP
-
         val allResults = getUniqueAttempts(testResultsHistory.value + result)
         val earnedFromTests = allResults.sumOf { res -> calculateEarnedXP(res) }
-        val netPoints = (earnedFromTests - _quitPenaltiesXP.value).coerceAtLeast(0)
-        val finalXP = maxOf(_userPoints.value, netPoints)
+        val finalXP = maxOf(_userPoints.value, earnedFromTests)
         _userPoints.value = finalXP
         val uid = _userProfile.value.uid
         if (uid.isNotBlank()) {
@@ -2638,7 +2658,7 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         awardedAttemptIds.add(attemptId)
         val allResults = getUniqueAttempts(testResultsHistory.value + result)
         val earnedFromTests = allResults.sumOf { res -> calculateEarnedXP(res) }
-        val netXP = (earnedFromTests - _quitPenaltiesXP.value).coerceAtLeast(0)
+        val netXP = earnedFromTests.coerceAtLeast(0)
         val finalXP = maxOf(_userPoints.value, netXP)
         _userPoints.value = finalXP
         val uid = _userProfile.value.uid

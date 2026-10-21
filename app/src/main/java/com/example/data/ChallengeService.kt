@@ -617,7 +617,7 @@ object ChallengeService {
             val currentStatus = if (txSnap.exists()) txSnap.getString("status") else null
             if (currentStatus == "REWARD_PAID") return // Prevent duplicate payout
 
-            val winnerReward = 200
+            val winnerReward = 100
             val loserDeduction = 100
 
             val record = mapOf(

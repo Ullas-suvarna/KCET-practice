@@ -62,7 +62,8 @@ data class TestResultEntity(
     val wrongCount: Int,
     val unansweredCount: Int,
     val timeTakenSeconds: Long,
-    val percentage: Float
+    val percentage: Float,
+    val isQuit: Boolean = false
 )
 
 @Entity(tableName = "bookmarks")
@@ -213,6 +214,7 @@ data class SeniorChatBooking(
 
 fun SeniorChatBooking.isExpired(nowMillis: Long = System.currentTimeMillis()): Boolean {
     if (status == "Completed" || status == "Expired") return true
+    if (status == "Confirmed" && (adminMessage.contains("continued by admin", ignoreCase = true) || adminMessage.contains("session continued", ignoreCase = true))) return false
     return try {
         val dateStr = selectedDate.trim()
         val dateFormat = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.US)

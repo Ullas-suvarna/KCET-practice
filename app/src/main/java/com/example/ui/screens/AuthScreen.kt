@@ -944,11 +944,7 @@ fun AuthScreen(
                                         var authSuccess = false
                                         var finalUid: String? = storedUid
 
-                                        val signInRes = if (storedPassword.isNotBlank() && storedPassword != typedPassword) {
-                                            Result.failure<com.google.firebase.auth.AuthResult>(Exception("wrong-password"))
-                                        } else {
-                                            FirebaseService.auth.signInWithEmailAndPassword(loginId, typedPassword).awaitResult()
-                                        }
+                                        val signInRes = FirebaseService.auth.signInWithEmailAndPassword(loginId, typedPassword).awaitResult()
                                         if (signInRes.isSuccess) {
                                             authSuccess = true
                                             finalUid = signInRes.getOrNull()?.user?.uid ?: storedUid

@@ -815,12 +815,13 @@ private fun AdminScreenScope.AdminPanelContent() {
     var mentorForAssignStudentDialog by remember { mutableStateOf<SeniorMentorProfile?>(null) }
     var mentorToDelete by remember { mutableStateOf<SeniorMentorProfile?>(null) }
     var showAddMentorDialog by remember { mutableStateOf(false) }
-    var bookingFilterStatus by remember { mutableStateOf("ALL") } // ALL, PENDING, CONFIRMED, UNASSIGNED
+    var bookingFilterStatus by remember { mutableStateOf("ALL") } // ALL, PENDING, CONFIRMED, EXPIRED, UNASSIGNED
 
     val filteredBookings = remember(seniorChatBookings, bookingFilterStatus) {
         when (bookingFilterStatus) {
-            "PENDING" -> seniorChatBookings.filter { it.status != "Confirmed" && it.status != "Declined" }
+            "PENDING" -> seniorChatBookings.filter { it.status != "Confirmed" && it.status != "Declined" && it.status != "Expired" && it.status != "Completed" }
             "CONFIRMED" -> seniorChatBookings.filter { it.status == "Confirmed" }
+            "EXPIRED" -> seniorChatBookings.filter { it.status == "Expired" || it.status == "Completed" }
             "UNASSIGNED" -> seniorChatBookings.filter { it.mentorName.isBlank() }
             else -> seniorChatBookings
         }
@@ -2324,8 +2325,9 @@ private fun AdminScreenScope.AdminPanelContent() {
                             ) {
                                 val filters = listOf(
                                     "ALL" to "All (${seniorChatBookings.size})",
-                                    "PENDING" to "Pending (${seniorChatBookings.count { it.status != "Confirmed" && it.status != "Declined" }})",
+                                    "PENDING" to "Pending (${seniorChatBookings.count { it.status != "Confirmed" && it.status != "Declined" && it.status != "Expired" && it.status != "Completed" }})",
                                     "CONFIRMED" to "Confirmed (${seniorChatBookings.count { it.status == "Confirmed" }})",
+                                    "EXPIRED" to "Ended/Expired (${seniorChatBookings.count { it.status == "Expired" || it.status == "Completed" }})",
                                     "UNASSIGNED" to "Unassigned (${seniorChatBookings.count { it.mentorName.isBlank() }})"
                                 )
                                 filters.forEach { (statusKey, label) ->
@@ -2780,25 +2782,55 @@ private fun AdminScreenScope.AdminPanelContent() {
                                                 }
                                             }
 
-                                            // END CHAT SESSION BUTTON (When status is Confirmed)
-                                            if (booking.status == "Confirmed") {
+                                            // END CHAT SESSION BUTTON (When status is Confirmed and not ended)
+                                            if (booking.status == "Confirmed" && !booking.isExpired()) {
                                                 Button(
                                                     onClick = {
+                                                        val targetMentorName = mentorNameText.ifBlank { booking.mentorName }
+                                                        val targetMentorEmail = assignedMentorEmailText.ifBlank { booking.assignedMentorEmail }
                                                         onUpdateBookingStatus(
                                                             booking.bookingId,
-                                                            "Completed",
-                                                            "1-on-1 Chat Session closed by Admin.",
-                                                            mentorNameText,
-                                                            assignedMentorEmailText,
+                                                            "Expired",
+                                                            "1-on-1 Chat Session ended by Admin. Link expired.",
+                                                            targetMentorName,
+                                                            targetMentorEmail,
                                                             ""
                                                         )
-                                                        Toast.makeText(context, "Chat Session Ended by Admin.", Toast.LENGTH_SHORT).show()
+                                                        Toast.makeText(context, "Chat Session Ended & Expired by Admin.", Toast.LENGTH_SHORT).show()
                                                     },
                                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6B21A8)),
                                                     modifier = Modifier.fillMaxWidth(),
                                                     shape = RoundedCornerShape(10.dp)
                                                 ) {
                                                     Text("🛑 End 1-on-1 Chat Session", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                                                }
+                                            }
+
+                                            // CONTINUE / RESUME CHAT SESSION BUTTON (When status is Expired or Completed)
+                                            if (booking.status == "Expired" || booking.status == "Completed" || booking.isExpired()) {
+                                                Button(
+                                                    onClick = {
+                                                        val targetMentorName = mentorNameText.ifBlank { booking.mentorName }
+                                                        val targetMentorEmail = assignedMentorEmailText.ifBlank { booking.assignedMentorEmail }
+                                                        onUpdateBookingStatus(
+                                                            booking.bookingId,
+                                                            "Confirmed",
+                                                            "Accepted by Senior Mentor ${targetMentorName.ifBlank { "Assigned Mentor" }} (Session continued by Admin)",
+                                                            targetMentorName,
+                                                            targetMentorEmail,
+                                                            ""
+                                                        )
+                                                        Toast.makeText(context, "Chat Session Continued by Admin! Messages reappeared.", Toast.LENGTH_SHORT).show()
+                                                    },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16A34A)),
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    shape = RoundedCornerShape(10.dp)
+                                                ) {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Icon(imageVector = Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Text("▶️ Continue 1-on-1 Chat Session (Restore)", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                                                    }
                                                 }
                                             }
 
@@ -8924,20 +8956,20 @@ private fun AdminScreenScope.AdminPanelContent() {
                                             onClick = {
                                                 onUpdateBookingStatus(
                                                     bookingToAssign.bookingId,
-                                                    bookingToAssign.status,
-                                                    bookingToAssign.adminMessage.ifBlank { "Assigned to Senior Mentor ${mentor.name}." },
+                                                    "Waiting for Senior Confirmation",
+                                                    bookingToAssign.adminMessage.ifBlank { "Payment verified by Admin. Assigned to Senior Mentor ${mentor.name}." },
                                                     mentor.name,
                                                     mentor.email,
                                                     ""
                                                 )
-                                                Toast.makeText(context, "Assigned ${mentor.name} to ${bookingToAssign.userName}!", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, "Sent assignment request to ${mentor.name}!", Toast.LENGTH_SHORT).show()
                                                 bookingForAssignMentorDialog = null
                                             },
                                             shape = RoundedCornerShape(8.dp),
                                             modifier = Modifier.weight(1f),
                                             contentPadding = PaddingValues(vertical = 4.dp)
                                         ) {
-                                            Text("Assign", fontSize = 11.sp)
+                                            Text("Assign (Request)", fontSize = 11.sp)
                                         }
 
                                         Button(
@@ -9068,20 +9100,20 @@ private fun AdminScreenScope.AdminPanelContent() {
                                             onClick = {
                                                 onUpdateBookingStatus(
                                                     booking.bookingId,
-                                                    booking.status,
-                                                    booking.adminMessage.ifBlank { "Assigned to Senior Mentor ${mentorToPair.name}." },
+                                                    "Waiting for Senior Confirmation",
+                                                    booking.adminMessage.ifBlank { "Payment verified by Admin. Assigned to Senior Mentor ${mentorToPair.name}." },
                                                     mentorToPair.name,
                                                     mentorToPair.email,
                                                     ""
                                                 )
-                                                Toast.makeText(context, "Assigned ${booking.userName} to ${mentorToPair.name}!", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, "Sent assignment request to ${mentorToPair.name}!", Toast.LENGTH_SHORT).show()
                                                 mentorForAssignStudentDialog = null
                                             },
                                             shape = RoundedCornerShape(8.dp),
                                             modifier = Modifier.weight(1f),
                                             contentPadding = PaddingValues(vertical = 4.dp)
                                         ) {
-                                            Text("Assign", fontSize = 11.sp)
+                                            Text("Assign (Request)", fontSize = 11.sp)
                                         }
 
                                         Button(

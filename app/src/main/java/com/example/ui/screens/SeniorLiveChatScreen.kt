@@ -12,6 +12,14 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import com.google.firebase.auth.FirebaseAuth
 import com.example.data.OneToOneMessage
 import com.example.data.SeniorMentorProfile
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -212,7 +220,7 @@ fun SeniorLiveChatScreen(
 
     // Active (un-expired) bookings list (up to 2 active slots per student)
     val activeBookings = remember(bookings, currentTimeMillis) {
-        bookings.filter { !it.isExpired(currentTimeMillis) && it.status != "Declined" && it.status != "Rejected" }
+        bookings.filter { !it.isExpired(currentTimeMillis) && it.status != "Declined" && it.status != "Rejected" && it.status != "Expired" && it.status != "Completed" }
     }
 
     val activeBooking = activeBookings.lastOrNull()
@@ -223,7 +231,7 @@ fun SeniorLiveChatScreen(
     }
 
     val pastExpiredBooking = remember(bookings, currentTimeMillis) {
-        if (activeBookings.isEmpty()) bookings.lastOrNull { it.isExpired(currentTimeMillis) } else null
+        if (activeBookings.isEmpty()) bookings.lastOrNull { it.isExpired(currentTimeMillis) || it.status == "Expired" || it.status == "Completed" } else null
     }
 
     Surface(
@@ -232,28 +240,50 @@ fun SeniorLiveChatScreen(
             .safeDrawingPadding(),
         color = Color(0xFFF8FAFC)
     ) {
+        var activeFullScreenChatBooking by remember { mutableStateOf<SeniorChatBooking?>(null) }
+        var isFullScreenChatExpired by remember { mutableStateOf(false) }
+        var unlockedMentorProfile by remember { mutableStateOf<SeniorMentorProfile?>(null) }
+        var selectedBookingForChat by remember { mutableStateOf<SeniorChatBooking?>(null) }
+        var showSignOutConfirmDialog by remember { mutableStateOf(false) }
+
+        val handleBackAction: () -> Unit = {
+            if (activeFullScreenChatBooking != null) {
+                activeFullScreenChatBooking = null
+            } else if (selectedBookingForChat != null) {
+                selectedBookingForChat = null
+            } else if (isMentorMode || unlockedMentorProfile != null) {
+                showSignOutConfirmDialog = true
+            } else {
+                onBack()
+            }
+        }
+
+        // Dedicated BackHandler so hardware/system back button safely prompts for Sign Out instead of dumping into student account
+        BackHandler(enabled = true) {
+            handleBackAction()
+        }
+
+        if (activeFullScreenChatBooking != null) {
+            val currentSelectedId = activeFullScreenChatBooking!!.bookingId
+            val targetBooking = bookings.find { it.bookingId == currentSelectedId } ?: activeFullScreenChatBooking!!
+            val isMentor = isMentorMode || unlockedMentorProfile != null
+            val otherPartyName = if (isMentor) targetBooking.userName.ifBlank { "Student" } else targetBooking.mentorName.ifBlank { "Assigned Senior Mentor" }
+            val isExpiredNow = isFullScreenChatExpired || targetBooking.status == "Expired" || targetBooking.status == "Completed" || targetBooking.isExpired(currentTimeMillis)
+
+            OneToOneChatFullScreen(
+                bookingId = targetBooking.bookingId,
+                otherUserName = otherPartyName,
+                isSenior = isMentor,
+                mentorName = targetBooking.mentorName,
+                studentId = targetBooking.userId,
+                isChatExpired = isExpiredNow,
+                onDismiss = { activeFullScreenChatBooking = null }
+            )
+        } else {
         Column(modifier = Modifier.fillMaxSize()) {
             val currentUserEmail = remember { FirebaseAuth.getInstance().currentUser?.email ?: "" }
 
             var selectedTab by remember(isMentorMode) { mutableStateOf(if (isMentorMode) "Senior Mentors" else "Student Portal") }
-            var unlockedMentorProfile by remember { mutableStateOf<SeniorMentorProfile?>(null) }
-            var selectedBookingForChat by remember { mutableStateOf<SeniorChatBooking?>(null) }
-            var showSignOutConfirmDialog by remember { mutableStateOf(false) }
-
-            val handleBackAction: () -> Unit = {
-                if (selectedBookingForChat != null) {
-                    selectedBookingForChat = null
-                } else if (isMentorMode || unlockedMentorProfile != null) {
-                    showSignOutConfirmDialog = true
-                } else {
-                    onBack()
-                }
-            }
-
-            // Dedicated BackHandler so hardware/system back button safely prompts for Sign Out instead of dumping into student account
-            BackHandler(enabled = true) {
-                handleBackAction()
-            }
 
             val registeredMentorsFlow = remember { FirebaseRealtimeService.observeAllSeniorMentors() }
             val realTimeMentors by registeredMentorsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -409,16 +439,17 @@ fun SeniorLiveChatScreen(
                         val mentorName = activeMentorProfile.name.trim().lowercase()
                         val bookingMentorName = booking.mentorName.trim().lowercase()
 
+                        // STRICT ISOLATION: Assigned specifically to this mentor only (no cross-mentor leaks or unassigned leaks)
                         (assignedEmail.isNotBlank() && assignedEmail == mentorEmail) ||
-                        (bookingMentorName.isNotBlank() && (bookingMentorName == mentorName || mentorName.contains(bookingMentorName) || bookingMentorName.contains(mentorName))) ||
-                        (mentorEmail == "ullassuvarna85@gmail.com") ||
-                        (booking.mentorName.isBlank() && booking.assignedMentorEmail.isBlank() && booking.status != "Declined" && booking.status != "Rejected")
+                        (bookingMentorName.isNotBlank() && bookingMentorName == mentorName)
                     }
                 }
-                val myConfirmedBookings = remember(myBookings) {
+                val myConfirmedBookings = remember(myBookings, currentTimeMillis) {
                     myBookings.filter { booking ->
                         (booking.status == "Confirmed" || booking.status == "Accepted") &&
-                        booking.adminMessage.contains("Accepted by Senior Mentor", ignoreCase = true)
+                        booking.status != "Expired" &&
+                        booking.status != "Completed" &&
+                        !booking.isExpired(currentTimeMillis)
                     }
                 }
                 val myUniqueConfirmedBookings = remember(myConfirmedBookings) {
@@ -426,11 +457,25 @@ fun SeniorLiveChatScreen(
                 }
                 val myPendingRequests = remember(myBookings) {
                     myBookings.filter { booking ->
+                        (booking.status == "Waiting for Senior Confirmation" || 
+                         booking.status == "Under Verification" || 
+                         booking.status == "Payment Under Verification") &&
                         booking.status != "Rejected by Mentor" &&
                         booking.status != "Declined" &&
                         booking.status != "Completed" &&
+                        booking.status != "Expired" &&
+                        booking.status != "Confirmed" &&
                         !booking.adminMessage.contains("Accepted by Senior Mentor", ignoreCase = true)
                     }
+                }
+                val myExpiredBookings = remember(myBookings, currentTimeMillis) {
+                    myBookings.filter { booking ->
+                        booking.status == "Expired" || booking.status == "Completed" ||
+                        ((booking.status == "Confirmed" || booking.status == "Accepted") && booking.isExpired(currentTimeMillis))
+                    }
+                }
+                val myUniqueExpiredBookings = remember(myExpiredBookings) {
+                    myExpiredBookings.distinctBy { it.userId.ifBlank { it.userEmail } }
                 }
 
                 LazyColumn(
@@ -760,6 +805,8 @@ fun SeniorLiveChatScreen(
                                     Button(
                                         onClick = {
                                             selectedBookingForChat = booking
+                                            activeFullScreenChatBooking = booking
+                                            isFullScreenChatExpired = false
                                         },
                                         modifier = Modifier.fillMaxWidth(),
                                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
@@ -774,6 +821,70 @@ fun SeniorLiveChatScreen(
                                                 fontWeight = FontWeight.Bold
                                             )
                                         }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // MY ENDED / EXPIRED SESSIONS (Ended by Admin or Expired)
+                    if (myUniqueExpiredBookings.isNotEmpty()) {
+                        item {
+                            Text(
+                                text = "⏰ Ended / Expired Sessions (${myUniqueExpiredBookings.size})",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF991B1B)
+                            )
+                        }
+
+                        items(myUniqueExpiredBookings) { booking ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF2F2)),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFECACA)),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column {
+                                            Text(booking.userName, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFF0F172A))
+                                            Text(booking.userEmail, fontSize = 11.sp, color = Color.Gray)
+                                        }
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = Color(0xFFFEE2E2)
+                                        ) {
+                                            Text(
+                                                text = "⏰ EXPIRED / ENDED",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFFDC2626),
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text("📅 Slot: ${booking.selectedDate} at ${booking.selectedTime}", fontSize = 12.sp, color = Color(0xFF7F1D1D))
+                                    Text("💬 Admin Note: ${booking.adminMessage.ifBlank { "Session closed by Admin." }}", fontSize = 11.sp, color = Color(0xFF991B1B))
+
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    OutlinedButton(
+                                        onClick = {
+                                            activeFullScreenChatBooking = booking
+                                            isFullScreenChatExpired = true
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFDC2626))
+                                    ) {
+                                        Text("👁️ View Ended Chat History", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }
@@ -1933,14 +2044,12 @@ fun SeniorLiveChatScreen(
                                 }
 
                                 if (isConfirmed) {
-                                    // Removed Instagram QR code as requested
-                                }
-
                                     Spacer(modifier = Modifier.height(14.dp))
-                                    var showStudentChatDialog by remember { mutableStateOf(false) }
-
                                     Button(
-                                        onClick = { showStudentChatDialog = true },
+                                        onClick = {
+                                            activeFullScreenChatBooking = activeBooking
+                                            isFullScreenChatExpired = false
+                                        },
                                         modifier = Modifier.fillMaxWidth(),
                                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16A34A)),
                                         shape = RoundedCornerShape(12.dp)
@@ -1951,17 +2060,7 @@ fun SeniorLiveChatScreen(
                                             Text("💬 Start 1-to-1 Live Chat Support", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                                         }
                                     }
-
-                                    if (showStudentChatDialog) {
-                                        OneToOneChatDialog(
-                                            bookingId = activeBooking.bookingId,
-                                            otherUserName = activeBooking.mentorName.ifBlank { "Assigned Senior Mentor" },
-                                            isSenior = false,
-                                            mentorName = activeBooking.mentorName,
-                                            studentId = activeBooking.userId,
-                                            onDismiss = { showStudentChatDialog = false }
-                                        )
-                                    }
+                                }
 
                                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -2085,26 +2184,56 @@ fun SeniorLiveChatScreen(
                                         .padding(12.dp)
                                 ) {
                                     Column {
+                                        val isEndedByAdmin = pastExpiredBooking.status == "Expired" || pastExpiredBooking.adminMessage.contains("ended by admin", ignoreCase = true)
                                         Text(
-                                            text = "⏰ Agreed Live Chat Time Has Passed",
+                                            text = if (isEndedByAdmin) "🛑 1-to-1 Live Chat Ended by Admin" else "⏰ Agreed Live Chat Time Has Passed",
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 13.sp,
                                             color = Color(0xFF991B1B)
                                         )
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Text(
-                                            text = "Your agreed session slot (${pastExpiredBooking.selectedDate} at ${pastExpiredBooking.selectedTime}) has completed. Free slot rescheduling is no longer available for this pass.",
+                                            text = if (isEndedByAdmin) "Your 1-on-1 session link with ${pastExpiredBooking.mentorName.ifBlank { "mentor" }} was ended by Admin. You cannot send messages right now. All chat history is saved below."
+                                                   else "Your agreed session slot (${pastExpiredBooking.selectedDate} at ${pastExpiredBooking.selectedTime}) has completed.",
                                             fontSize = 12.sp,
                                             color = Color(0xFF7F1D1D),
                                             lineHeight = 17.sp
                                         )
+                                        if (pastExpiredBooking.adminMessage.isNotBlank()) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "💬 Note: ${pastExpiredBooking.adminMessage}",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Color(0xFF991B1B)
+                                            )
+                                        }
                                         Spacer(modifier = Modifier.height(6.dp))
                                         Text(
-                                            text = "👉 To schedule a new 1-on-1 live chat session with Senior Mentor, please pick a date & time below and book a new session.",
-                                            fontSize = 12.sp,
+                                            text = if (isEndedByAdmin) "ℹ️ If Admin clicks 'Continue' in Admin Panel, this chat session will restore immediately and you can chat again."
+                                                   else "👉 To schedule a new 1-on-1 live chat session with Senior Mentor, please pick a date & time below and book a new session.",
+                                            fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = Color(0xFFB91C1C)
                                         )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                Button(
+                                    onClick = {
+                                        activeFullScreenChatBooking = pastExpiredBooking
+                                        isFullScreenChatExpired = true
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(imageVector = Icons.Default.Chat, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("👁️ View Chat History (Expired)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                     }
                                 }
                             }
@@ -2888,7 +3017,8 @@ fun SeniorLiveChatScreen(
             shape = RoundedCornerShape(16.dp)
         )
     }
-}
+        }
+    }
 }
 }
 
@@ -3127,16 +3257,21 @@ fun RealtimeSeniorChatBox(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun OneToOneChatDialog(
+fun OneToOneChatFullScreen(
     bookingId: String,
     otherUserName: String,
     isSenior: Boolean,
     mentorName: String = "",
     studentId: String = "",
+    isChatExpired: Boolean = false,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    BackHandler(enabled = true) {
+        onDismiss()
+    }
 
     val chatRoomId = remember(bookingId, mentorName, studentId) {
         if (bookingId.isNotBlank()) {
@@ -3167,6 +3302,19 @@ fun OneToOneChatDialog(
     var textInput by remember { mutableStateOf("") }
     var isSending by remember { mutableStateOf(false) }
 
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(isChatExpired) {
+        if (!isChatExpired) {
+            delay(250)
+            try {
+                focusRequester.requestFocus()
+                keyboardController?.show()
+            } catch (_: Exception) {}
+        }
+    }
+
     val currentUserId = remember { FirebaseAuth.getInstance().currentUser?.uid ?: "anon" }
     val activeChatUsersFlow = remember(chatRoomId) { FirebaseRealtimeService.observeActiveChatUsers(chatRoomId) }
     val activeChatUsers by activeChatUsersFlow
@@ -3188,29 +3336,14 @@ fun OneToOneChatDialog(
         }
     }
 
-    val view = LocalView.current
-    androidx.compose.ui.window.Dialog(
-        onDismissRequest = onDismiss,
-        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    Surface(
+        modifier = Modifier
+            .fillMaxSize()
+            .imePadding()
+            .navigationBarsPadding(),
+        color = Color(0xFFF8FAFC)
     ) {
-        SideEffect {
-            val window = (view.parent as? android.view.WindowId)?.let { null } // This is tricky in Compose
-            // Actually, the best way in Compose for Dialog is to use a custom Dialog or just use platform width = false
-            // and ensure the root Surface has imePadding.
-            // However, to make it really work, we can try to find the window.
-            val dialogWindow = (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
-            if (dialogWindow != null) {
-                WindowCompat.setDecorFitsSystemWindows(dialogWindow, false)
-            }
-        }
-        Surface(
-            modifier = Modifier
-                .fillMaxSize()
-                .imePadding()
-                .safeDrawingPadding(),
-            color = Color(0xFFF8FAFC)
-        ) {
-            Column(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
                 // Header
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
@@ -3280,6 +3413,45 @@ fun OneToOneChatDialog(
                             }
                         ) {
                             Icon(imageVector = Icons.Default.Delete, contentDescription = "Clear Chat", tint = Color(0xFFEF4444))
+                        }
+                    }
+                }
+
+                // Expired / Session Ended Banner
+                if (isChatExpired) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        color = Color(0xFFFEF2F2),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFCA5A5)),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = Color(0xFFDC2626),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    "🛑 1-to-1 Chat Session Expired / Ended",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF991B1B)
+                                )
+                                Text(
+                                    "This 1-to-1 session was ended by Admin. The connection link between student and mentor is broken and chat is in read-only mode. If Admin clicks 'Continue' in Admin Panel, this chat will be restored.",
+                                    fontSize = 10.sp,
+                                    color = Color(0xFFB91C1C),
+                                    lineHeight = 14.sp
+                                )
+                            }
                         }
                     }
                 }
@@ -3484,72 +3656,137 @@ fun OneToOneChatDialog(
                     }
                 }
 
-                // Message input box
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = Color.White,
-                    tonalElevation = 8.dp
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                // Message input box or Expired banner
+                if (isChatExpired) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color(0xFFF1F5F9),
+                        tonalElevation = 4.dp
                     ) {
-                        OutlinedTextField(
-                            value = textInput,
-                            onValueChange = { textInput = it },
-                            placeholder = { Text("Type your doubt...") },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(24.dp),
-                            maxLines = 3,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Color(0xFFE11D48),
-                                unfocusedBorderColor = Color(0xFFCBD5E1)
-                            )
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        IconButton(
-                            onClick = {
-                                if (textInput.isNotBlank()) {
-                                    scope.launch {
-                                        isSending = true
-                                        val senderName = if (isSenior) {
-                                            mentorProfile?.name?.ifBlank { "Senior Mentor" } ?: "Senior Mentor"
-                                        } else {
-                                            FirebaseAuth.getInstance().currentUser?.displayName?.ifBlank { "Student" } ?: "Student"
-                                        }
-                                        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: "user_anon"
-                                        val success = FirebaseRealtimeService.sendOneToOneMessage(
-                                            bookingId = chatRoomId,
-                                            senderId = uid,
-                                            senderName = senderName,
-                                            message = textInput.trim(),
-                                            isSenior = isSenior
-                                        )
-                                        isSending = false
-                                        if (success) {
-                                            textInput = ""
-                                        } else {
-                                            Toast.makeText(context, "Failed to send message", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                            },
-                            enabled = !isSending && textInput.isNotBlank()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Send,
-                                contentDescription = "Send",
-                                tint = if (textInput.isNotBlank()) Color(0xFFE11D48) else Color.LightGray
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = Color(0xFF64748B),
+                                modifier = Modifier.size(16.dp)
                             )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Session Expired ⏰ - Chat is locked & read-only",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF64748B)
+                            )
+                        }
+                    }
+                } else {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color.White,
+                        tonalElevation = 8.dp
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = textInput,
+                                onValueChange = { textInput = it },
+                                placeholder = { Text("Type your doubt to mentor...") },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .focusRequester(focusRequester),
+                                shape = RoundedCornerShape(24.dp),
+                                maxLines = 4,
+                                keyboardOptions = KeyboardOptions(
+                                    capitalization = KeyboardCapitalization.Sentences,
+                                    autoCorrect = true,
+                                    keyboardType = KeyboardType.Text,
+                                    imeAction = ImeAction.Send
+                                ),
+                                keyboardActions = KeyboardActions(
+                                    onSend = {
+                                        if (textInput.isNotBlank() && !isSending) {
+                                            scope.launch {
+                                                isSending = true
+                                                val senderName = if (isSenior) {
+                                                    mentorProfile?.name?.ifBlank { "Senior Mentor" } ?: "Senior Mentor"
+                                                } else {
+                                                    FirebaseAuth.getInstance().currentUser?.displayName?.ifBlank { "Student" } ?: "Student"
+                                                }
+                                                val uid = FirebaseAuth.getInstance().currentUser?.uid ?: "user_anon"
+                                                val success = FirebaseRealtimeService.sendOneToOneMessage(
+                                                    bookingId = chatRoomId,
+                                                    senderId = uid,
+                                                    senderName = senderName,
+                                                    message = textInput.trim(),
+                                                    isSenior = isSenior
+                                                )
+                                                isSending = false
+                                                if (success) {
+                                                    textInput = ""
+                                                } else {
+                                                    Toast.makeText(context, "Failed to send message", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        }
+                                    }
+                                ),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = Color(0xFFE11D48),
+                                    unfocusedBorderColor = Color(0xFFCBD5E1)
+                                )
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            IconButton(
+                                onClick = {
+                                    if (textInput.isNotBlank() && !isSending) {
+                                        scope.launch {
+                                            isSending = true
+                                            val senderName = if (isSenior) {
+                                                mentorProfile?.name?.ifBlank { "Senior Mentor" } ?: "Senior Mentor"
+                                            } else {
+                                                FirebaseAuth.getInstance().currentUser?.displayName?.ifBlank { "Student" } ?: "Student"
+                                            }
+                                            val uid = FirebaseAuth.getInstance().currentUser?.uid ?: "user_anon"
+                                            val success = FirebaseRealtimeService.sendOneToOneMessage(
+                                                bookingId = chatRoomId,
+                                                senderId = uid,
+                                                senderName = senderName,
+                                                message = textInput.trim(),
+                                                isSenior = isSenior
+                                            )
+                                            isSending = false
+                                            if (success) {
+                                                textInput = ""
+                                            } else {
+                                                Toast.makeText(context, "Failed to send message", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    }
+                                },
+                                enabled = !isSending && textInput.isNotBlank()
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Send,
+                                    contentDescription = "Send",
+                                    tint = if (textInput.isNotBlank()) Color(0xFFE11D48) else Color.LightGray
+                                )
+                            }
                         }
                     }
                 }
             }
         }
     }
-}
 
 @Composable
 fun InlineOneToOneChatBox(
@@ -3809,60 +4046,73 @@ fun InlineOneToOneChatBox(
             }
 
             // Input Row
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = Color.White
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            val isChatSessionExpired = booking.status == "Expired" || booking.status == "Completed" || booking.isExpired()
+            if (isChatSessionExpired) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color(0xFFF1F5F9)
                 ) {
-                    OutlinedTextField(
-                        value = textInput,
-                        onValueChange = { textInput = it },
-                        placeholder = { Text("Reply to student...") },
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(20.dp),
-                        maxLines = 2,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(0xFF10B981),
-                            unfocusedBorderColor = Color(0xFFCBD5E1)
+                    Box(modifier = Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
+                        Text("🔒 Session Expired - Chat link ended by Admin. Cannot continue chat unless Admin resumes session.", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF64748B))
+                    }
+                }
+            } else {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color.White
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = textInput,
+                            onValueChange = { textInput = it },
+                            placeholder = { Text("Reply to student...") },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(20.dp),
+                            maxLines = 2,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color(0xFF10B981),
+                                unfocusedBorderColor = Color(0xFFCBD5E1)
+                            )
                         )
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    IconButton(
-                        onClick = {
-                            if (textInput.isNotBlank()) {
-                                scope.launch {
-                                    isSending = true
-                                    val success = FirebaseRealtimeService.sendOneToOneMessage(
-                                        bookingId = chatRoomId,
-                                        senderId = currentUserId,
-                                        senderName = activeMentorName,
-                                        message = textInput.trim(),
-                                        isSenior = true
-                                    )
-                                    isSending = false
-                                    if (success) {
-                                        textInput = ""
-                                    } else {
-                                        Toast.makeText(context, "Failed to send message", Toast.LENGTH_SHORT).show()
+                        Spacer(modifier = Modifier.width(6.dp))
+                        IconButton(
+                            onClick = {
+                                if (textInput.isNotBlank()) {
+                                    scope.launch {
+                                        isSending = true
+                                        val success = FirebaseRealtimeService.sendOneToOneMessage(
+                                            bookingId = chatRoomId,
+                                            senderId = currentUserId,
+                                            senderName = activeMentorName,
+                                            message = textInput.trim(),
+                                            isSenior = true
+                                        )
+                                        isSending = false
+                                        if (success) {
+                                            textInput = ""
+                                        } else {
+                                            Toast.makeText(context, "Failed to send message", Toast.LENGTH_SHORT).show()
+                                        }
                                     }
                                 }
-                            }
-                        },
-                        enabled = !isSending && textInput.isNotBlank()
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Send,
-                            contentDescription = "Send",
-                            tint = if (textInput.isNotBlank()) Color(0xFF10B981) else Color.LightGray
-                        )
+                            },
+                            enabled = !isSending && textInput.isNotBlank()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Send,
+                                contentDescription = "Send",
+                                tint = if (textInput.isNotBlank()) Color(0xFF10B981) else Color.LightGray
+                            )
+                        }
                     }
                 }
             }
         }
     }
 }
+

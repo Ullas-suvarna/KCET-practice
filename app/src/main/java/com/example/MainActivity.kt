@@ -398,8 +398,10 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
                                     )
                                 }
 
-                                BottomTab.PROFILE -> ProfileScreen(
-                                    userProfile = userProfile,
+                                BottomTab.PROFILE -> {
+                                    val context = androidx.compose.ui.platform.LocalContext.current
+                                    ProfileScreen(
+                                        userProfile = userProfile,
                                     testResults = testHistory,
                                     userPoints = userPoints,
                                     leaderboardEntries = leaderboard,
@@ -418,8 +420,14 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
                                     onNavigateTab = { tab -> viewModel.selectBottomTab(tab) },
                                     onDeleteTestResult = { id -> viewModel.deleteTestResult(id) },
                                     onClearTestHistory = { viewModel.clearAllTestHistory() },
-                                    onChallengeStudent = { opponent -> selectedChallengeOpponent = opponent }
-                                )
+                                    onChallengeStudent = { opponent -> selectedChallengeOpponent = opponent },
+                                    onLinkPassword = { email, pass ->
+                                        viewModel.linkEmailPasswordToGoogleUser(email, pass) { success, msg ->
+                                            android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                    )
+                                }
                             }
                         }
                     }

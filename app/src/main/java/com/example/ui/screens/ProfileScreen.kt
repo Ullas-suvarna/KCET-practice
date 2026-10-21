@@ -125,7 +125,8 @@ fun ProfileScreen(
     onNavigateTab: (BottomTab) -> Unit = {},
     onDeleteTestResult: (Int) -> Unit = {},
     onClearTestHistory: () -> Unit = {},
-    onChallengeStudent: ((LeaderboardEntry) -> Unit)? = null
+    onChallengeStudent: ((LeaderboardEntry) -> Unit)? = null,
+    onLinkPassword: (String, String) -> Unit
 ) {
     val context = LocalContext.current
 
@@ -1146,16 +1147,14 @@ fun ProfileScreen(
                             Toast.makeText(context, "Password must be at least 6 characters long", Toast.LENGTH_SHORT).show()
                             return@Button
                         }
-                        profileScope.launch {
-                            try {
-                                FirebaseService.auth.currentUser?.updatePassword(passTrimmed)
-                            } catch (_: Exception) {}
-
-                            FirebaseService.updateUserPasswordInFirestore(userProfile.email.ifBlank { userProfile.uid }, passTrimmed)
-                            Toast.makeText(context, "Password updated successfully! Please use your new password on next login.", Toast.LENGTH_LONG).show()
-                            showChangePasswordDialog = false
-                            newPass = ""
+                        val email = userProfile.email.ifBlank { FirebaseService.auth.currentUser?.email ?: "" }
+                        if (email.isBlank()) {
+                            Toast.makeText(context, "No email found for this account. Cannot link password.", Toast.LENGTH_LONG).show()
+                            return@Button
                         }
+                        onLinkPassword(email, passTrimmed)
+                        showChangePasswordDialog = false
+                        newPass = ""
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4F46E5))
                 ) {
