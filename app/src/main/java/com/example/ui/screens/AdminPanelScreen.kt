@@ -932,6 +932,9 @@ private fun AdminScreenScope.AdminPanelContent() {
     var collegeRankRangeInput by remember { mutableStateOf("1 – 1,000") }
     var collegeCategoryInput by remember { mutableStateOf("GM") }
     var collegeCutoffRankInput by remember { mutableStateOf("1200") }
+    var collegePlacementPctInput by remember { mutableStateOf("94") }
+    var collegeRecruitersInput by remember { mutableStateOf("Microsoft, Google, Amazon, Bosch, Cisco") }
+    var isSavingCollege by remember { mutableStateOf(false) }
 
     var collegeRankDropdownExpanded by remember { mutableStateOf(false) }
     var collegeCategoryDropdownExpanded by remember { mutableStateOf(false) }
@@ -6725,6 +6728,8 @@ private fun AdminScreenScope.AdminPanelContent() {
                                             collegeLogoResInput = college.logoResUrl
                                             collegeWebsiteInput = college.websiteUrl
                                             collegeMapUrlInput = college.mapLocationQuery
+                                            collegePlacementPctInput = college.placementPercentage.toString()
+                                            collegeRecruitersInput = college.topRecruiters.joinToString(", ")
                                             val existingCutoff = branchCutoffs.firstOrNull { cutoff ->
                                                 doesCutoffMatchCollege(cutoff, college)
                                             } ?: CollegeSampleData.getCutoffsForCollege(college).firstOrNull()
@@ -7405,6 +7410,185 @@ private fun AdminScreenScope.AdminPanelContent() {
             }
         }
 
+
+    if (showEditCollegeDialog && collegeEditingId.isNotBlank()) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { if (!isSavingCollege) showEditCollegeDialog = false },
+            title = {
+                Text(text = "✏️ Edit College Details", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 500.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedTextField(
+                        value = collegeNameInput,
+                        onValueChange = { collegeNameInput = it },
+                        label = { Text("College Name *") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = collegeCodeInput,
+                            onValueChange = { collegeCodeInput = it },
+                            label = { Text("College Code (e.g. E004)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = collegeDistrictInput,
+                            onValueChange = { collegeDistrictInput = it },
+                            label = { Text("District / Location") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = collegeTypeInput,
+                            onValueChange = { collegeTypeInput = it },
+                            label = { Text("College Type") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = collegeNaacInput,
+                            onValueChange = { collegeNaacInput = it },
+                            label = { Text("NAAC Grade (e.g. A++)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = collegeNirfInput,
+                            onValueChange = { collegeNirfInput = it },
+                            label = { Text("NIRF Rank") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = collegeRatingInput,
+                            onValueChange = { collegeRatingInput = it },
+                            label = { Text("Student Rating (1-5)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = collegeTuitionFeeInput,
+                            onValueChange = { collegeTuitionFeeInput = it },
+                            label = { Text("Annual Tuition Fee (₹)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = collegeHostelFeeInput,
+                            onValueChange = { collegeHostelFeeInput = it },
+                            label = { Text("Hostel & Mess Fee (₹)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = collegeHighestPkgInput,
+                            onValueChange = { collegeHighestPkgInput = it },
+                            label = { Text("Highest Package (LPA)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = collegeAvgPkgInput,
+                            onValueChange = { collegeAvgPkgInput = it },
+                            label = { Text("Average Package (LPA)") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = collegePlacementPctInput,
+                            onValueChange = { collegePlacementPctInput = it },
+                            label = { Text("Placement %") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = collegeWebsiteInput,
+                            onValueChange = { collegeWebsiteInput = it },
+                            label = { Text("Website URL") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    OutlinedTextField(
+                        value = collegeRecruitersInput,
+                        onValueChange = { collegeRecruitersInput = it },
+                        label = { Text("Top Recruiters (comma-separated)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = collegeMapUrlInput,
+                        onValueChange = { collegeMapUrlInput = it },
+                        label = { Text("Google Maps / Location Query") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !isSavingCollege,
+                    onClick = {
+                        if (collegeNameInput.isBlank()) {
+                            Toast.makeText(context, "College name cannot be empty", Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+                        isSavingCollege = true
+                        scope.launch {
+                            try {
+                                val updated = CollegeInfo(
+                                    id = collegeEditingId,
+                                    name = collegeNameInput.trim(),
+                                    code = collegeCodeInput.trim().ifBlank { "E000" },
+                                    district = collegeDistrictInput.trim().ifBlank { "Bengaluru Urban" },
+                                    collegeType = collegeTypeInput.trim().ifBlank { "Autonomous" },
+                                    imageResUrl = collegeImageResInput.trim(),
+                                    logoResUrl = collegeLogoResInput.trim(),
+                                    naacGrade = collegeNaacInput.trim().ifBlank { "A++" },
+                                    nirfRank = collegeNirfInput.toIntOrNull() ?: 50,
+                                    tuitionFeePerYear = collegeTuitionFeeInput.toIntOrNull() ?: 118000,
+                                    hostelFeePerYear = collegeHostelFeeInput.toIntOrNull() ?: 85000,
+                                    highestPackageLpa = collegeHighestPkgInput.toFloatOrNull() ?: 50.0f,
+                                    avgPackageLpa = collegeAvgPkgInput.toFloatOrNull() ?: 12.0f,
+                                    placementPercentage = collegePlacementPctInput.toIntOrNull() ?: 90,
+                                    topRecruiters = collegeRecruitersInput.split(",").map { it.trim() }.filter { it.isNotBlank() },
+                                    studentRating = collegeRatingInput.toFloatOrNull() ?: 4.5f,
+                                    hasHostel = collegeHasHostelInput,
+                                    websiteUrl = collegeWebsiteInput.trim(),
+                                    mapLocationQuery = collegeMapUrlInput.trim().ifBlank { "${collegeNameInput.trim()} ${collegeDistrictInput.trim()}" }
+                                )
+                                onSaveCollege(updated)
+                                isSavingCollege = false
+                                showEditCollegeDialog = false
+                                Toast.makeText(context, "College details updated successfully!", Toast.LENGTH_SHORT).show()
+                            } catch (e: Exception) {
+                                isSavingCollege = false
+                                Toast.makeText(context, "Error saving college: ${e.message}", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                ) {
+                    if (isSavingCollege) {
+                        androidx.compose.material3.CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White)
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+                    Text("Save Changes")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !isSavingCollege,
+                    onClick = { showEditCollegeDialog = false }
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     val currentSelectedCollege = selectedCollegeForCutoff
     if (showCutoffDialog && currentSelectedCollege != null) {

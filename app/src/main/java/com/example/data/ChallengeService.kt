@@ -665,6 +665,7 @@ object ChallengeService {
     }
 
     suspend fun adjustUserXp(userId: String, xpDelta: Int): Int {
+        Log.d(TAG, "Adjusting XP for $userId by $xpDelta")
         try {
             if (userId.isBlank()) return 0
             val cleanId = userId.trim()

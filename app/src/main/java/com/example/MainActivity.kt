@@ -78,6 +78,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        com.example.data.FirebaseService.initContext(applicationContext)
+
         // Initialize Android System Push Notification channels & schedule daily study alarms safely
         try {
             com.example.notification.DailyNotificationManager.createNotificationChannels(this)
@@ -203,7 +205,7 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
 
     LaunchedEffect(Unit) {
         if (isInitialAppLoading) {
-            delay(1000)
+            delay(100)
             isInitialAppLoading = false
         }
     }

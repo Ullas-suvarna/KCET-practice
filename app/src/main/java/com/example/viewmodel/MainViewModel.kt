@@ -13,6 +13,7 @@ import com.example.data.Announcement
 import com.example.data.AppDatabase
 import com.example.data.BadgeItem
 import com.example.data.FirebaseService
+import com.example.data.FirebaseService.awaitResult
 import com.google.firebase.auth.FirebaseAuth
 import com.example.data.KcetRepository
 import com.example.data.LeaderboardEntry
@@ -178,6 +179,9 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
     val showBadgeCongratsDialog: StateFlow<Boolean> = _showBadgeCongratsDialog.asStateFlow()
 
     // Auth & User Profile State
+    init {
+        com.example.data.FirebaseService.initContext(app.applicationContext)
+    }
     private val sessionPrefs: android.content.SharedPreferences = app.getSharedPreferences("kcet_session_v2", android.content.Context.MODE_PRIVATE)
 
     // Gamification & Points State
@@ -356,8 +360,19 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         initialValue = false
     )
 
-    private fun saveSession(uid: String, email: String, name: String, isAdmin: Boolean = false, authMethod: String = "Email & Password", photoUrl: String? = null) {
-        sessionPrefs.edit()
+    private fun saveSession(uid: String, email: String, name: String, isAdmin: Boolean = false, authMethod: String = "Email & Password", photoUrl: String? = null, isPremium: Boolean = false) {
+        val cleanUid = uid.trim()
+        val cleanEmail = email.lowercase().trim()
+        val effectivePremium = isPremium ||
+            sessionPrefs.getBoolean("is_premium", false) ||
+            (cleanUid.isNotBlank() && sessionPrefs.getBoolean("is_premium_$cleanUid", false)) ||
+            (cleanEmail.isNotBlank() && sessionPrefs.getBoolean("is_premium_$cleanEmail", false)) ||
+            isAdmin ||
+            cleanEmail == "ullassuvarna65@gmail.com" ||
+            FirebaseService.getPremiumOverride(cleanUid) == true ||
+            (cleanEmail.isNotBlank() && FirebaseService.getPremiumOverride(cleanEmail) == true)
+
+        val editor = sessionPrefs.edit()
             .putBoolean("is_logged_in", true)
             .putString("user_uid", uid)
             .putString("user_email", email)
@@ -365,7 +380,16 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
             .putBoolean("is_admin", isAdmin)
             .putString("auth_method", authMethod)
             .putString("user_photo_url", photoUrl)
-            .apply()
+            .putBoolean("is_premium", effectivePremium)
+
+        if (cleanUid.isNotBlank()) editor.putBoolean("is_premium_$cleanUid", effectivePremium)
+        if (cleanEmail.isNotBlank()) editor.putBoolean("is_premium_$cleanEmail", effectivePremium)
+        editor.apply()
+
+        if (effectivePremium) {
+            if (cleanUid.isNotBlank()) FirebaseService.setPremiumOverride(cleanUid, true)
+            if (cleanEmail.isNotBlank()) FirebaseService.setPremiumOverride(cleanEmail, true)
+        }
     }
 
     private fun clearSession() {
@@ -376,14 +400,26 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
     val isLoggedIn: StateFlow<Boolean> = _isLoggedIn.asStateFlow()
 
     private val _userProfile = MutableStateFlow(
-        UserProfile(
-            uid = sessionPrefs.getString("user_uid", "") ?: "",
-            name = sessionPrefs.getString("user_name", "KCET Aspirant") ?: "KCET Aspirant",
-            email = sessionPrefs.getString("user_email", "") ?: "",
-            isPremium = sessionPrefs.getBoolean("is_admin", false) || sessionPrefs.getString("user_email", "") == "ullassuvarna65@gmail.com",
-            signInMethod = sessionPrefs.getString("auth_method", "Email & Password") ?: "Email & Password",
-            photoUrl = sessionPrefs.getString("user_photo_url", null)
-        )
+        run {
+            val savedUid = (sessionPrefs.getString("user_uid", "") ?: "").trim()
+            val savedEmail = (sessionPrefs.getString("user_email", "") ?: "").lowercase().trim()
+            val isAdmin = sessionPrefs.getBoolean("is_admin", false) || savedEmail == "ullassuvarna65@gmail.com"
+            val isPrem = isAdmin ||
+                sessionPrefs.getBoolean("is_premium", false) ||
+                (savedUid.isNotBlank() && sessionPrefs.getBoolean("is_premium_$savedUid", false)) ||
+                (savedEmail.isNotBlank() && sessionPrefs.getBoolean("is_premium_$savedEmail", false)) ||
+                FirebaseService.getPremiumOverride(savedUid) == true ||
+                (savedEmail.isNotBlank() && FirebaseService.getPremiumOverride(savedEmail) == true)
+
+            UserProfile(
+                uid = savedUid,
+                name = sessionPrefs.getString("user_name", "KCET Aspirant") ?: "KCET Aspirant",
+                email = savedEmail,
+                isPremium = isPrem,
+                signInMethod = sessionPrefs.getString("auth_method", "Email & Password") ?: "Email & Password",
+                photoUrl = sessionPrefs.getString("user_photo_url", null)
+            )
+        }
     )
     val userProfile: StateFlow<UserProfile> = _userProfile.asStateFlow()
 
@@ -739,13 +775,15 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         // Ensure any student in leaderboard is included
         lbEntries.forEach { entry ->
             if (entry.name.isNotBlank() && !entry.name.contains("mentor", ignoreCase = true) && !entry.name.contains("admin", ignoreCase = true)) {
+                val override = FirebaseService.getPremiumOverride(entry.uid)
+                    ?: (if (entry.email.isNotBlank()) FirebaseService.getPremiumOverride(entry.email) else null)
                 mergedList.add(
                     UserProfile(
                         uid = entry.uid,
                         name = entry.name,
                         email = entry.email,
                         kcetTargetRank = entry.kcetTargetRank,
-                        isPremium = false,
+                        isPremium = override ?: false,
                         registrationDate = "2026"
                     )
                 )
@@ -755,13 +793,16 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         // Ensure any student who completed a test in CBT is included
         testResults.forEach { test ->
             if (test.userName.isNotBlank() && test.userName != "Guest") {
+                val override = FirebaseService.getPremiumOverride(test.userId)
+                    ?: (if (test.userEmail.isNotBlank()) FirebaseService.getPremiumOverride(test.userEmail) else null)
+                    ?: (if (test.studentId.isNotBlank()) FirebaseService.getPremiumOverride(test.studentId) else null)
                 mergedList.add(
                     UserProfile(
                         uid = test.userId.ifBlank { "test_${test.docId}" },
                         name = test.userName,
                         email = test.userEmail,
                         studentId = test.studentId,
-                        isPremium = false,
+                        isPremium = override ?: false,
                         registrationDate = "2026"
                     )
                 )
@@ -771,12 +812,14 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         // Ensure any student who submitted a payment receipt is included
         receipts.forEach { receipt ->
             if (receipt.userName.isNotBlank()) {
+                val override = FirebaseService.getPremiumOverride(receipt.userId)
+                    ?: (if (receipt.userEmail.isNotBlank()) FirebaseService.getPremiumOverride(receipt.userEmail) else null)
                 mergedList.add(
                     UserProfile(
                         uid = receipt.userId.ifBlank { "receipt_${receipt.receiptId}" },
                         name = receipt.userName,
                         email = receipt.userEmail.ifBlank { receipt.userPhone },
-                        isPremium = receipt.status == "VERIFIED",
+                        isPremium = override ?: (receipt.status == "VERIFIED"),
                         registrationDate = "2026"
                     )
                 )
@@ -785,7 +828,14 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
 
         // Ensure all benchmark default students are included
         SampleData.defaultStudents.forEach { defaultStd ->
-            mergedList.add(defaultStd)
+            val override = FirebaseService.getPremiumOverride(defaultStd.uid)
+                ?: (if (defaultStd.email.isNotBlank()) FirebaseService.getPremiumOverride(defaultStd.email) else null)
+                ?: (if (defaultStd.formattedStudentId.isNotBlank()) FirebaseService.getPremiumOverride(defaultStd.formattedStudentId) else null)
+            val isPrem = when {
+                override != null -> override
+                else -> defaultStd.isPremium
+            }
+            mergedList.add(defaultStd.copy(isPremium = isPrem))
         }
 
         // Intelligent multi-pass clustering deduplication
@@ -793,7 +843,11 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.Eagerly,
-        initialValue = SampleData.defaultStudents
+        initialValue = SampleData.defaultStudents.map { std ->
+            val override = FirebaseService.getPremiumOverride(std.uid)
+                ?: (if (std.email.isNotBlank()) FirebaseService.getPremiumOverride(std.email) else null)
+            if (override != null) std.copy(isPremium = override) else std
+        }
     )
 
     // Registered Senior Mentors for Admin & Student Portals
@@ -823,16 +877,35 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         
         val isSavedLoggedIn = sessionPrefs.getBoolean("is_logged_in", false)
         val currentFbUser = FirebaseService.auth.currentUser
-        
-        if (isSavedLoggedIn || currentFbUser != null) {
+        val savedEmail = sessionPrefs.getString("user_email", "") ?: currentFbUser?.email ?: ""
+        val isAdminOrDemo = savedEmail.equals("ullassuvarna65@gmail.com", ignoreCase = true) ||
+                savedEmail.equals("karthik.kcet2026@gmail.com", ignoreCase = true) ||
+                sessionPrefs.getBoolean("is_admin", false) ||
+                !savedEmail.contains("@")
+
+        if (!isAdminOrDemo && currentFbUser != null) {
+            try {
+                kotlinx.coroutines.runBlocking {
+                    currentFbUser.reload().awaitResult()
+                }
+            } catch (_: Exception) {}
+            if (!currentFbUser.isEmailVerified) {
+                clearSession()
+                try { FirebaseService.auth.signOut() } catch (_: Exception) {}
+            }
+        }
+
+        val effectiveLoggedIn = sessionPrefs.getBoolean("is_logged_in", false)
+
+        if (effectiveLoggedIn || currentFbUser != null) {
             val savedUid = sessionPrefs.getString("user_uid", null) ?: currentFbUser?.uid ?: ""
-            val savedEmail = sessionPrefs.getString("user_email", null) ?: currentFbUser?.email ?: ""
+            val savedEmailFinal = sessionPrefs.getString("user_email", null) ?: currentFbUser?.email ?: ""
             
             if (savedUid.isNotBlank()) {
                 startObservingUserData(savedUid)
 
                 viewModelScope.launch {
-                    val remoteXP = FirebaseService.getUserPointsOnce(savedUid, savedEmail)
+                    val remoteXP = FirebaseService.getUserPointsOnce(savedUid, savedEmailFinal)
                     if (remoteXP > _userPoints.value) {
                         _userPoints.value = remoteXP
                         sessionPrefs.edit().putInt("user_xp", remoteXP).putInt("user_xp_$savedUid", remoteXP).apply()
@@ -905,26 +978,19 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
                     val totalCorrect = uniqueResults.sumOf { it.correctCount }
                     val totalQs = uniqueResults.sumOf { it.totalQuestions }
                     val calculatedAcc = if (totalQs > 0) (totalCorrect.toFloat() / totalQs) * 100f else 0f
-                    val earnedFromTests = uniqueResults.sumOf { res -> calculateEarnedXP(res) }
-                    val finalXP = maxOf(_userPoints.value, earnedFromTests)
-                    _userPoints.value = finalXP
+                    val currentXP = _userPoints.value
                     val uid = _userProfile.value.uid
-                    if (uid.isNotBlank()) {
-                        sessionPrefs.edit().putInt("user_xp", finalXP).putInt("user_xp_$uid", finalXP).apply()
-                    } else {
-                        sessionPrefs.edit().putInt("user_xp", finalXP).apply()
-                    }
                     _analyticsSummary.value = _analyticsSummary.value.copy(
                         totalTestsTaken = maxOf(_analyticsSummary.value.totalTestsTaken, uniqueResults.size),
                         overallAccuracy = if (calculatedAcc > 0f) calculatedAcc else _analyticsSummary.value.overallAccuracy,
-                        totalPoints = finalXP,
+                        totalPoints = currentXP,
                         avgTimePerQuestionSec = uniqueResults.map { it.timeTakenSeconds.toFloat() / it.totalQuestions }.average().toFloat()
                     )
                     updateLeaderboard()
-                    if (finalXP > 0 && (_userProfile.value.uid.isNotBlank() || _userProfile.value.email.isNotBlank())) {
+                    if (currentXP > 0 && (uid.isNotBlank() || _userProfile.value.email.isNotBlank())) {
                         FirebaseService.updateLeaderboardEntry(
                             profile = _userProfile.value,
-                            points = finalXP,
+                            points = currentXP,
                             accuracy = calculatedAcc,
                             testsCount = uniqueResults.size
                         )
@@ -966,10 +1032,26 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
                             logout()
                             navigateTo(Screen.AUTH)
                         } else {
-                            if (me.isPremium != match.isPremium) {
-                                _userProfile.value = me.copy(isPremium = match.isPremium)
-                                sessionPrefs.edit().putBoolean("is_premium", match.isPremium).apply()
-                                if (!match.isPremium) {
+                            val override = FirebaseService.getPremiumOverride(me.uid)
+                                ?: (if (me.email.isNotBlank()) FirebaseService.getPremiumOverride(me.email) else null)
+                                ?: (if (me.formattedStudentId.isNotBlank()) FirebaseService.getPremiumOverride(me.formattedStudentId) else null)
+
+                            val targetPremium = when {
+                                override != null -> override
+                                match.isPremium -> true
+                                sessionPrefs.getBoolean("is_premium", false) -> true
+                                (me.uid.isNotBlank() && sessionPrefs.getBoolean("is_premium_${me.uid}", false)) -> true
+                                (me.email.isNotBlank() && sessionPrefs.getBoolean("is_premium_${me.email}", false)) -> true
+                                else -> me.isPremium
+                            }
+
+                            if (me.isPremium != targetPremium) {
+                                _userProfile.value = me.copy(isPremium = targetPremium)
+                                val editor = sessionPrefs.edit().putBoolean("is_premium", targetPremium)
+                                if (me.uid.isNotBlank()) editor.putBoolean("is_premium_${me.uid}", targetPremium)
+                                if (me.email.isNotBlank()) editor.putBoolean("is_premium_${me.email}", targetPremium)
+                                editor.apply()
+                                if (!targetPremium) {
                                     _userBadges.value = defaultLockedBadges
                                 }
                             }
@@ -1216,7 +1298,25 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
             _isLoggedIn.value = true
             val targetScreen = if (isMentor) Screen.SENIOR_CHAT else Screen.MAIN
             resetNavigation(targetScreen, BottomTab.HOME)
-            saveSession(calculatedUid, cleanEmail, if (isMentor && name == "KCET Aspirant") "Senior Mentor" else name, isAdmin = false, authMethod = signInMethod, photoUrl = remoteProfile?.photoUrl)
+
+            val isPrem = if (isMentor) true else (
+                remoteProfile?.isPremium == true ||
+                sessionPrefs.getBoolean("is_premium", false) ||
+                sessionPrefs.getBoolean("is_premium_$calculatedUid", false) ||
+                sessionPrefs.getBoolean("is_premium_$cleanEmail", false) ||
+                FirebaseService.getPremiumOverride(calculatedUid) == true ||
+                (cleanEmail.isNotBlank() && FirebaseService.getPremiumOverride(cleanEmail) == true)
+            )
+
+            saveSession(
+                uid = calculatedUid,
+                email = cleanEmail,
+                name = if (isMentor && name == "KCET Aspirant") "Senior Mentor" else name,
+                isAdmin = false,
+                authMethod = signInMethod,
+                photoUrl = remoteProfile?.photoUrl,
+                isPremium = isPrem
+            )
 
             // Clear local Room database history so previous student data does not bleed into new account
             repository.clearTestHistory()
@@ -1230,11 +1330,6 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
             _currentUserPaymentReceipt.value = null
             _activeTestResult.value = null
             _userAnswers.value = emptyMap()
-
-            val isPrem = if (isMentor) true else (remoteProfile?.isPremium
-                ?: FirebaseService.getPremiumOverride(calculatedUid)
-                ?: (if (cleanEmail.isNotBlank()) FirebaseService.getPremiumOverride(cleanEmail) else null)
-                ?: false)
 
             if (remoteProfile != null) {
                 _userProfile.value = remoteProfile.copy(
@@ -1765,9 +1860,19 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
                     val current = _userProfile.value
                     val updatedPhotoUrl = if (remoteProfile.photoUrl.isNullOrBlank()) current.photoUrl else remoteProfile.photoUrl
                     val wasPremium = current.isPremium
+                    val override = FirebaseService.getPremiumOverride(uid)
+                        ?: (if (activeEmail.isNotBlank()) FirebaseService.getPremiumOverride(activeEmail) else null)
+                    val resolvedPremium = when {
+                        override != null -> override
+                        remoteProfile.isPremium -> true
+                        sessionPrefs.getBoolean("is_premium", false) -> true
+                        (uid.isNotBlank() && sessionPrefs.getBoolean("is_premium_$uid", false)) -> true
+                        (activeEmail.isNotBlank() && sessionPrefs.getBoolean("is_premium_$activeEmail", false)) -> true
+                        else -> current.isPremium
+                    }
                     
                     _userProfile.value = current.copy(
-                        isPremium = remoteProfile.isPremium,
+                        isPremium = resolvedPremium,
                         name = remoteProfile.name.ifBlank { current.name },
                         kcetTargetRank = remoteProfile.kcetTargetRank.ifBlank { current.kcetTargetRank },
                         targetStream = remoteProfile.targetStream.ifBlank { current.targetStream },
@@ -1780,12 +1885,14 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
                     // Keep sessionPrefs in sync
                     sessionPrefs.edit().apply {
                         putString("user_name", remoteProfile.name.ifBlank { current.name })
-                        putBoolean("is_premium", remoteProfile.isPremium)
+                        putBoolean("is_premium", resolvedPremium)
+                        if (uid.isNotBlank()) putBoolean("is_premium_$uid", resolvedPremium)
+                        if (activeEmail.isNotBlank()) putBoolean("is_premium_$activeEmail", resolvedPremium)
                         putString("user_photo_url", updatedPhotoUrl)
                         apply()
                     }
 
-                    if (!remoteProfile.isPremium && wasPremium) {
+                    if (!resolvedPremium && wasPremium) {
                         // Reset badges immediately upon premium revocation
                         _userBadges.value = defaultLockedBadges
                     }
@@ -2543,8 +2650,12 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         }
 
         val allResults = getUniqueAttempts(testResultsHistory.value + result)
-        val earnedFromTests = allResults.sumOf { res -> calculateEarnedXP(res) }
-        val finalXP = maxOf(_userPoints.value, earnedFromTests)
+        val earnedXP = calculateEarnedXP(result) // -50 penalty
+        val finalXP = if (awardedAttemptIds.add(attemptId)) {
+            (_userPoints.value + earnedXP).coerceAtLeast(0)
+        } else {
+            _userPoints.value
+        }
         _userPoints.value = finalXP
         val uid = _userProfile.value.uid
         if (uid.isNotBlank()) {
@@ -2564,6 +2675,21 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
                 accuracy = percentage,
                 testsCount = allResults.size
             )
+            try {
+                val cleanUid = if (uid.isNotBlank()) uid else "user_" + _userProfile.value.email.replace(".", "_")
+                val rtdb = com.google.firebase.database.FirebaseDatabase.getInstance(FirebaseRealtimeService.RTDB_URL)
+                rtdb.getReference("liveXP").child(cleanUid).updateChildren(mapOf(
+                    "xp" to finalXP,
+                    "points" to finalXP,
+                    "updatedAt" to System.currentTimeMillis()
+                ))
+                rtdb.getReference("leaderboard").child(cleanUid).updateChildren(mapOf(
+                    "xp" to finalXP,
+                    "points" to finalXP
+                ))
+            } catch (e: Exception) {
+                android.util.Log.w("MainViewModel", "Error updating RTDB XP on quit: ${e.message}")
+            }
         }
 
         updateLeaderboard()
@@ -2655,11 +2781,13 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         val speedPerQ = if (total > 0) timeSpentSeconds / total else 60
 
         // Calculate XP idempotently: awarded only once per unique attempt
-        awardedAttemptIds.add(attemptId)
         val allResults = getUniqueAttempts(testResultsHistory.value + result)
-        val earnedFromTests = allResults.sumOf { res -> calculateEarnedXP(res) }
-        val netXP = earnedFromTests.coerceAtLeast(0)
-        val finalXP = maxOf(_userPoints.value, netXP)
+        val earnedXP = calculateEarnedXP(result)
+        val finalXP = if (awardedAttemptIds.add(attemptId)) {
+            (_userPoints.value + earnedXP).coerceAtLeast(0)
+        } else {
+            _userPoints.value
+        }
         _userPoints.value = finalXP
         val uid = _userProfile.value.uid
         if (uid.isNotBlank()) {
@@ -2789,6 +2917,21 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
                 accuracy = percentage,
                 testsCount = testsCount
             )
+            try {
+                val cleanUid = if (uid.isNotBlank()) uid else "user_" + _userProfile.value.email.replace(".", "_")
+                val rtdb = com.google.firebase.database.FirebaseDatabase.getInstance(FirebaseRealtimeService.RTDB_URL)
+                rtdb.getReference("liveXP").child(cleanUid).updateChildren(mapOf(
+                    "xp" to _userPoints.value,
+                    "points" to _userPoints.value,
+                    "updatedAt" to System.currentTimeMillis()
+                ))
+                rtdb.getReference("leaderboard").child(cleanUid).updateChildren(mapOf(
+                    "xp" to _userPoints.value,
+                    "points" to _userPoints.value
+                ))
+            } catch (e: Exception) {
+                android.util.Log.w("MainViewModel", "Error updating RTDB XP on submit: ${e.message}")
+            }
         }
 
         updateLeaderboard()
@@ -3222,16 +3365,27 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
             }
         )
 
-        if (sorted.isNotEmpty()) {
+        val distinctSorted = sorted.distinctBy { item ->
+            listOf(
+                item.college.id.ifBlank { item.college.code }.lowercase(),
+                item.college.name.lowercase(),
+                item.branchCode.lowercase(),
+                item.closingRank,
+                item.admissionChance,
+                item.totalEstimatedCostPerYear
+            )
+        }
+
+        if (distinctSorted.isNotEmpty()) {
             val hist = SavedRecommendationHistory(
                 query = query,
-                topMatchCollegeName = sorted.first().college.name,
-                resultsCount = sorted.size
+                topMatchCollegeName = distinctSorted.first().college.name,
+                resultsCount = distinctSorted.size
             )
             _recommendationHistory.value = (listOf(hist) + _recommendationHistory.value).take(10)
         }
 
-        return sorted
+        return distinctSorted
     }
 
     fun addCollege(college: CollegeInfo) {
@@ -3379,6 +3533,16 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
 
             FirebaseService.saveUserProfile(profileToSave)
             FirebaseService.updateStudentPremiumStatus(uid, isPremium, profileToSave.email, profileToSave.studentId)
+            
+            // Explicitly sync with RTDB user_premium node for real-time push
+            try {
+                com.google.firebase.database.FirebaseDatabase.getInstance(com.example.data.FirebaseRealtimeService.RTDB_URL)
+                    .getReference("user_premium")
+                    .child(uid.replace(".", "_").replace("@", "_"))
+                    .setValue(isPremium)
+            } catch (e: Exception) {
+                android.util.Log.e("MainViewModel", "Error syncing premium to RTDB: ${e.message}")
+            }
 
             // If revoking premium, reset all milestone badges and receipts in Firestore
             if (!isPremium) {
@@ -3389,11 +3553,13 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
             }
 
             val active = _userProfile.value
-            if (active.uid == profileToSave.uid || 
+            val isTargetActive = active.uid == profileToSave.uid || 
                 (active.email.isNotBlank() && active.email.equals(profileToSave.email, ignoreCase = true)) ||
                 (active.formattedStudentId.isNotBlank() && active.formattedStudentId.equals(profileToSave.formattedStudentId, ignoreCase = true))
-            ) {
+
+            if (isTargetActive) {
                 _userProfile.value = active.copy(isPremium = isPremium)
+                sessionPrefs.edit().putBoolean("is_premium", isPremium).apply()
                 
                 if (!isPremium) {
                     // Update active student's local state immediately
@@ -3412,6 +3578,13 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
                     )
                 }
             }
+
+            // Always update sessionPrefs per-user keys so local device remembers across refreshes
+            val editor = sessionPrefs.edit()
+            if (profileToSave.uid.isNotBlank()) editor.putBoolean("is_premium_${profileToSave.uid}", isPremium)
+            if (profileToSave.email.isNotBlank()) editor.putBoolean("is_premium_${profileToSave.email.lowercase().trim()}", isPremium)
+            if (uid.isNotBlank()) editor.putBoolean("is_premium_$uid", isPremium)
+            editor.apply()
         }
     }
 

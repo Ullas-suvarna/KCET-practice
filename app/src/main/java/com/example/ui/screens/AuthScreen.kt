@@ -1003,9 +1003,7 @@ fun AuthScreen(
                                                     currentAuthUser.reload().awaitResult()
                                                 } catch (_: Exception) {}
                                             }
-                                            val isFirebaseVerified = currentAuthUser?.isEmailVerified == true
-                                            val isFirestoreVerified = accountRecord?.get("emailVerified") == "true"
-                                            val isEmailVerified = isFirebaseVerified || isFirestoreVerified
+                                            val isEmailVerified = currentAuthUser?.isEmailVerified == true
 
                                             if (!isEmailVerified) {
                                                 try { FirebaseService.auth.signOut() } catch (_: Exception) {}
@@ -2382,6 +2380,14 @@ fun handleGoogleSignIn(
                         val existingProfile = FirebaseService.getUserProfileOnce(uid)
                         val blockCheck = FirebaseService.checkIfUserIsBlocked(uid)
                         val emailBlockCheck = if (email.isNotBlank()) FirebaseService.checkIfUserIsBlocked(email) else Pair(false, "")
+
+                        if (!firebaseUser.isEmailVerified) {
+                             try { FirebaseService.auth.signOut() } catch (_: Exception) {}
+                             onLoadingStateChange(false)
+                             onErrorStateChange("⚠️ Email not verified. Please verify your email before logging in.")
+                             Toast.makeText(context, "⚠️ Email not verified.", Toast.LENGTH_LONG).show()
+                             return@launch
+                        }
 
                         if (existingProfile?.isBlocked == true || blockCheck.first || emailBlockCheck.first) {
                             try { FirebaseService.auth.signOut() } catch (_: Exception) {}

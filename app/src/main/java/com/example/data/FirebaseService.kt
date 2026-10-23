@@ -26,8 +26,17 @@ import kotlin.coroutines.resumeWithException
 object FirebaseService {
     private const val TAG = "FirebaseService"
 
-    // Static in-memory override registry for student premium statuses, ensuring immediate and consistent reads/refresh preservation
+    // Static override registry with persistent SharedPreferences backing for student premium statuses
     private val premiumOverrides = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    private var appContext: android.content.Context? = null
+
+    fun initContext(context: android.content.Context) {
+        appContext = context.applicationContext
+    }
+
+    private fun getPremiumPrefs(): android.content.SharedPreferences? {
+        return appContext?.getSharedPreferences("kcet_premium_overrides", android.content.Context.MODE_PRIVATE)
+    }
 
     fun setPremiumOverride(identifier: String, isPremium: Boolean) {
         if (identifier.isBlank()) return
@@ -41,6 +50,19 @@ object FirebaseService {
         }
         val safeRaw = identifier.replace(".", "_").replace("@", "_")
         premiumOverrides[safeRaw] = isPremium
+
+        try {
+            getPremiumPrefs()?.edit()?.apply {
+                putBoolean("prem_$clean", isPremium)
+                putBoolean("prem_$identifier", isPremium)
+                putBoolean("prem_$emailDocId", isPremium)
+                putBoolean("prem_$safeRaw", isPremium)
+                if (clean.contains("@")) {
+                    putBoolean("prem_${clean.lowercase().trim()}", isPremium)
+                }
+                apply()
+            }
+        } catch (_: Exception) {}
     }
 
     fun getPremiumOverride(identifier: String): Boolean? {
@@ -48,7 +70,25 @@ object FirebaseService {
         val clean = normalizeIdentifier(identifier)
         val emailDocId = clean.replace(".", "_").replace("@", "_")
         val safeRaw = identifier.replace(".", "_").replace("@", "_")
-        return premiumOverrides[clean] ?: premiumOverrides[identifier] ?: premiumOverrides[emailDocId] ?: premiumOverrides[safeRaw] ?: if (clean.contains("@")) premiumOverrides[clean.lowercase().trim()] else null
+
+        val inMem = premiumOverrides[clean] ?: premiumOverrides[identifier] ?: premiumOverrides[emailDocId] ?: premiumOverrides[safeRaw] ?: if (clean.contains("@")) premiumOverrides[clean.lowercase().trim()] else null
+        if (inMem != null) return inMem
+
+        try {
+            val prefs = getPremiumPrefs()
+            if (prefs != null) {
+                val keys = listOf("prem_$clean", "prem_$identifier", "prem_$emailDocId", "prem_$safeRaw")
+                for (k in keys) {
+                    if (prefs.contains(k)) {
+                        val p = prefs.getBoolean(k, false)
+                        premiumOverrides[clean] = p
+                        premiumOverrides[identifier] = p
+                        return p
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        return null
     }
 
     fun extractBoolean(doc: com.google.firebase.firestore.DocumentSnapshot, vararg fieldNames: String): Boolean? {
@@ -599,13 +639,21 @@ object FirebaseService {
 
             if (docs.isNotEmpty()) {
                 val doc = docs.maxByOrNull { it.getLong("lastUpdatedMillis") ?: 0L } ?: docs.first()
-                val parsedPrem = docs.firstNotNullOfOrNull { extractBoolean(it, "isPremium", "premium", "hasPremium") }
-                val override = getPremiumOverride(identifier) ?: docs.firstNotNullOfOrNull { getPremiumOverride(it.id) }
-                val isAnyPremium = parsedPrem ?: override ?: false
+                val anyDocPremium = docs.any { extractBoolean(it, "isPremium", "premium", "hasPremium") == true }
+                val override = getPremiumOverride(identifier)
+                    ?: (if (cleanId.isNotBlank()) getPremiumOverride(cleanId) else null)
+                    ?: (if (emailDocId.isNotBlank()) getPremiumOverride(emailDocId) else null)
+                    ?: docs.firstNotNullOfOrNull { getPremiumOverride(it.id) }
+                val isAnyPremium = when {
+                    override != null -> override
+                    anyDocPremium -> true
+                    else -> false
+                }
 
-                if (parsedPrem != null) {
-                    setPremiumOverride(identifier, parsedPrem)
-                    if (cleanId.isNotBlank()) setPremiumOverride(cleanId, parsedPrem)
+                if (isAnyPremium) {
+                    setPremiumOverride(identifier, true)
+                    if (cleanId.isNotBlank()) setPremiumOverride(cleanId, true)
+                    if (emailDocId.isNotBlank()) setPremiumOverride(emailDocId, true)
                 }
 
                 val isAnyBlocked = docs.any { it.getBoolean("isBlocked") == true }
@@ -659,10 +707,20 @@ object FirebaseService {
             val sUid = snapshot.getString("uid")?.takeIf { it.isNotBlank() } ?: fallbackId
             val sEmail = (snapshot.getString("email") ?: cleanEmail).lowercase().trim()
             val parsedPrem = extractBoolean(snapshot, "isPremium", "premium", "hasPremium")
-            val isPrem = parsedPrem ?: getPremiumOverride(sUid) ?: (if (sEmail.isNotBlank()) getPremiumOverride(sEmail) else null) ?: false
+            val override = getPremiumOverride(sUid)
+                ?: (if (sEmail.isNotBlank()) getPremiumOverride(sEmail) else null)
+                ?: (if (emailDocId.isNotBlank()) getPremiumOverride(emailDocId) else null)
+                ?: (if (cleanUid.isNotBlank()) getPremiumOverride(cleanUid) else null)
+            val isPrem = when {
+                override != null -> override
+                parsedPrem == true -> true
+                else -> false
+            }
 
-            setPremiumOverride(sUid, isPrem)
-            if (sEmail.isNotBlank()) setPremiumOverride(sEmail, isPrem)
+            if (isPrem) {
+                setPremiumOverride(sUid, true)
+                if (sEmail.isNotBlank()) setPremiumOverride(sEmail, true)
+            }
 
             return UserProfile(
                 uid = sUid,
@@ -909,10 +967,17 @@ object FirebaseService {
                 ?: if (phone.isNotBlank()) "Student ($phone)" else if (email.isNotBlank() && email.contains("@")) email.substringBefore("@").replace(".", " ") else "Student"
             val photoUrl = doc.getString("photoUrl")
             val parsedPrem = extractBoolean(doc, "isPremium", "premium", "hasPremium")
-            val isPremium = parsedPrem ?: getPremiumOverride(uid) ?: (if (email.isNotBlank()) getPremiumOverride(email) else null) ?: false
-            if (parsedPrem != null) {
-                setPremiumOverride(uid, parsedPrem)
-                if (email.isNotBlank()) setPremiumOverride(email, parsedPrem)
+            val override = getPremiumOverride(uid)
+                ?: (if (email.isNotBlank()) getPremiumOverride(email) else null)
+                ?: getPremiumOverride(doc.id)
+            val isPremium = when {
+                override != null -> override
+                parsedPrem == true -> true
+                else -> false
+            }
+            if (isPremium) {
+                setPremiumOverride(uid, true)
+                if (email.isNotBlank()) setPremiumOverride(email, true)
             }
             val kcetTargetRank = doc.getString("kcetTargetRank") ?: "Under 1000"
             val targetStream = doc.getString("targetStream") ?: "Engineering (B.E / B.Tech)"
@@ -950,7 +1015,7 @@ object FirebaseService {
     fun observeAllUserProfiles(): Flow<List<UserProfile>> = callbackFlow {
         var usersList = emptyList<UserProfile>()
         var userAccountsList = emptyList<UserProfile>()
-
+        var premiumSet = setOf<String>()
         var deletedSet = setOf<String>()
 
         fun emitCombined() {
@@ -965,7 +1030,16 @@ object FirebaseService {
                     (s.uid.isNotBlank() && defaultStd.uid.isNotBlank() && s.uid.equals(defaultStd.uid, ignoreCase = true))
                 }
                 if (!exists) {
-                    val isPrem = getPremiumOverride(defaultStd.uid) ?: getPremiumOverride(defaultStd.email) ?: defaultStd.isPremium
+                    val override = getPremiumOverride(defaultStd.uid)
+                        ?: (if (defaultStd.email.isNotBlank()) getPremiumOverride(defaultStd.email) else null)
+                        ?: (if (defaultStd.formattedStudentId.isNotBlank()) getPremiumOverride(defaultStd.formattedStudentId) else null)
+                    val isPrem = when {
+                        override != null -> override
+                        premiumSet.contains(defaultStd.uid) -> true
+                        defaultStd.email.isNotBlank() && premiumSet.contains(defaultStd.email.lowercase().trim()) -> true
+                        defaultStd.isPremium -> true
+                        else -> false
+                    }
                     allRaw.add(defaultStd.copy(isPremium = isPrem))
                 }
             }
@@ -983,10 +1057,23 @@ object FirebaseService {
                 .groupBy { getStudentDeduplicationKey(it) }
                 .map { (_, list) ->
                     val primary = list.maxByOrNull { it.lastUpdatedMillis } ?: list.first()
-                    val override = getPremiumOverride(primary.uid)
+                    val override = list.firstNotNullOfOrNull { getPremiumOverride(it.uid) }
+                        ?: list.firstNotNullOfOrNull { if (it.email.isNotBlank()) getPremiumOverride(it.email) else null }
+                        ?: list.firstNotNullOfOrNull { if (it.formattedStudentId.isNotBlank()) getPremiumOverride(it.formattedStudentId) else null }
+                        ?: getPremiumOverride(primary.uid)
                         ?: (if (primary.email.isNotBlank()) getPremiumOverride(primary.email) else null)
-                        ?: (if (primary.formattedStudentId.isNotBlank()) getPremiumOverride(primary.formattedStudentId) else null)
-                    val isAnyPremium = override ?: primary.isPremium
+
+                    val isAnyDocPremium = list.any { it.isPremium }
+                    val isAnyPremium = when {
+                        override != null -> override
+                        isAnyDocPremium -> true
+                        premiumSet.contains(primary.uid) -> true
+                        primary.email.isNotBlank() && premiumSet.contains(primary.email.lowercase().trim()) -> true
+                        primary.formattedStudentId.isNotBlank() && premiumSet.contains(primary.formattedStudentId) -> true
+                        list.any { premiumSet.contains(it.uid) || (it.email.isNotBlank() && premiumSet.contains(it.email.lowercase().trim())) } -> true
+                        else -> false
+                    }
+
                     val isAnyBlocked = list.any { it.isBlocked }
                     val isAnyLoggedOut = list.any { it.isForceLoggedOut }
                     val blockReason = list.firstOrNull { it.blockReason.isNotBlank() }?.blockReason ?: primary.blockReason
@@ -1031,6 +1118,24 @@ object FirebaseService {
             emitCombined()
         }
 
+        val premiumListener = firestore.collection("premium_students").addSnapshotListener { snapshot, error ->
+            if (error == null && snapshot != null) {
+                val newPremSet = mutableSetOf<String>()
+                for (doc in snapshot.documents) {
+                    val isPrem = extractBoolean(doc, "isPremium", "premium") ?: true
+                    if (isPrem) {
+                        newPremSet.add(doc.id)
+                        doc.getString("uid")?.let { if (it.isNotBlank()) newPremSet.add(it) }
+                        doc.getString("email")?.let { if (it.isNotBlank()) newPremSet.add(it.lowercase().trim()) }
+                        doc.getString("studentId")?.let { if (it.isNotBlank()) newPremSet.add(it) }
+                    }
+                }
+                premiumSet = newPremSet
+                newPremSet.forEach { setPremiumOverride(it, true) }
+            }
+            emitCombined()
+        }
+
         // Initial emission with defaults
         emitCombined()
 
@@ -1038,6 +1143,7 @@ object FirebaseService {
             deletedListener.remove()
             usersListener.remove()
             accountsListener.remove()
+            premiumListener.remove()
         }
     }
 
@@ -1193,6 +1299,24 @@ object FirebaseService {
                         doc.reference.set(updateData, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
                     } catch (_: Exception) {}
                 }
+            }
+
+            // 4. Update dedicated premium_students collection
+            val premDocData = mapOf(
+                "isPremium" to isPremium,
+                "uid" to identifier,
+                "email" to cleanEmail,
+                "studentId" to studentId,
+                "lastUpdatedMillis" to now
+            )
+            if (identifier.isNotBlank()) {
+                firestore.collection("premium_students").document(identifier).set(premDocData, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+            }
+            if (emailDocId.isNotBlank()) {
+                firestore.collection("premium_students").document(emailDocId).set(premDocData, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+            }
+            if (cleanEmail.isNotBlank()) {
+                firestore.collection("premium_students").document(cleanEmail).set(premDocData, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
             }
             true
         } catch (e: Exception) {
