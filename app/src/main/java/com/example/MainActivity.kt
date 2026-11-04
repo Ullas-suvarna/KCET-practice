@@ -195,40 +195,19 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
     val subscriptionPrice by viewModel.subscriptionPrice.collectAsStateWithLifecycle()
 
     // Active Exam Screen Setup
+    // Active Exam Screen Setup
     val activity = LocalContext.current as? android.app.Activity
-
-    // Cold-start / App-launch white loading transition when launching directly to home/dashboard
-    val isDirectLandingOnApp = remember {
-        currentScreen == Screen.MAIN || currentScreen == Screen.ADMIN || currentScreen == Screen.SENIOR_CHAT
-    }
-    var isInitialAppLoading by remember { mutableStateOf(isDirectLandingOnApp) }
-
-    LaunchedEffect(Unit) {
-        if (isInitialAppLoading) {
-            delay(100)
-            isInitialAppLoading = false
-        }
-    }
 
     KcetPracticeTheme(darkTheme = isDarkMode) {
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = if (isDarkMode) MaterialTheme.colorScheme.background else Color.White
         ) {
-            if (isInitialAppLoading && (currentScreen == Screen.MAIN || currentScreen == Screen.ADMIN || currentScreen == Screen.SENIOR_CHAT)) {
-                WhiteLoadingScreen(
-                    message = when (currentScreen) {
-                        Screen.ADMIN -> "Loading Admin Dashboard..."
-                        Screen.SENIOR_CHAT -> "Loading Senior Mentorship..."
-                        else -> "Loading Home Page..."
-                    }
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(if (isDarkMode) MaterialTheme.colorScheme.background else Color.White)
-                ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(if (isDarkMode) MaterialTheme.colorScheme.background else Color.White)
+            ) {
                     when (currentScreen) {
                 Screen.SPLASH -> {
                     SplashScreen(
@@ -843,6 +822,5 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
             }
         }
     }
-}
 }
 }

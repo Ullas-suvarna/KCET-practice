@@ -2022,10 +2022,11 @@ object FirebaseService {
             val mergedList = mutableListOf<LeaderboardEntry>()
 
             // Gather all candidate sources in strict priority order:
-            // 1. Seed defaults
+            // 1. Seed defaults (canonical 25 statewide benchmark students)
             // 2. User profile records
             // 3. Dedicated leaderboard records (contain latest synced XP)
             val allCandidates = mutableListOf<LeaderboardEntry>()
+            allCandidates.addAll(defaultRegisteredStudents)
             allCandidates.addAll(userEntries.values)
             allCandidates.addAll(leaderboardMap.values)
 
@@ -2074,8 +2075,7 @@ object FirebaseService {
                 }
 
                 val isCurrent = (currentUid.isNotBlank() && (uidClean == currentUid || emailLower == currentUid.lowercase())) ||
-                                (currentEmail.isNotBlank() && emailLower == currentEmail) ||
-                                candidate.isCurrentUser
+                                (currentEmail.isNotBlank() && emailLower == currentEmail)
 
                 val processedCandidate = candidate.copy(isCurrentUser = isCurrent)
 
@@ -2109,7 +2109,7 @@ object FirebaseService {
                         accuracy = bestAccuracy,
                         testsCount = maxOf(existing.testsCount, processedCandidate.testsCount),
                         avatarInitials = bestInitials,
-                        isCurrentUser = existing.isCurrentUser || processedCandidate.isCurrentUser
+                        isCurrentUser = isCurrent || existing.isCurrentUser
                     )
                 } else {
                     mergedList.add(processedCandidate)
@@ -2123,8 +2123,7 @@ object FirebaseService {
             ).mapIndexed { index, entry ->
                 entry.copy(
                     rank = index + 1,
-                    isCurrentUser = entry.isCurrentUser || 
-                        (currentUid.isNotBlank() && entry.uid == currentUid) || 
+                    isCurrentUser = (currentUid.isNotBlank() && entry.uid == currentUid) || 
                         (currentEmail.isNotBlank() && entry.email.trim().lowercase() == currentEmail)
                 )
             }
