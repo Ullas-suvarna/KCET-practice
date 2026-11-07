@@ -3820,17 +3820,20 @@ object FirebaseService {
         }
     }
 
-    suspend fun deleteSeniorMentorFromFirestore(mentorName: String) {
+    suspend fun deleteSeniorMentorFromFirestore(mentorName: String): Boolean {
         val mentorId = mentorName.trim().lowercase().replace(Regex("[^a-z0-9_]"), "_").ifBlank { "mentor_" }
         FirebaseRealtimeService.markMentorDeletedLocally(mentorName)
         val collections = listOf("mentors", "registered_mentors", "registeredMentors", "senior_mentors")
+        var success = false
         for (col in collections) {
             try {
-                firestore.collection(col).document(mentorId).delete().awaitResult()
+                val task = firestore.collection(col).document(mentorId).delete().awaitResult()
+                if (task.isSuccess) success = true
             } catch (e: Exception) {
                 Log.w(TAG, "Delete mentor from $col error: ${e.message}")
             }
         }
+        return success
     }
 
     suspend fun updateSeniorMentorStatusInFirestore(mentorName: String, newStatus: String) {

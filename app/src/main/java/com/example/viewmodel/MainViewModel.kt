@@ -901,10 +901,10 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
             val savedUid = sessionPrefs.getString("user_uid", null) ?: currentFbUser?.uid ?: ""
             val savedEmailFinal = sessionPrefs.getString("user_email", null) ?: currentFbUser?.email ?: ""
             
-            if (savedUid.isNotBlank()) {
-                startObservingUserData(savedUid)
+            if (savedUid.isNotBlank() || savedEmailFinal.isNotBlank()) {
+                startObservingUserData(savedUid, savedEmailFinal)
 
-                viewModelScope.launch {
+                viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                     val remoteXP = FirebaseService.getUserPointsOnce(savedUid, savedEmailFinal)
                     if (remoteXP > _userPoints.value) {
                         _userPoints.value = remoteXP
@@ -914,23 +914,23 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
                     }
                 }
                 
-                viewModelScope.launch {
-                    val isAdminSession = savedEmail.trim().equals("ullassuvarna65@gmail.com", ignoreCase = true) ||
+                viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    val isAdminSession = savedEmailFinal.trim().equals("ullassuvarna65@gmail.com", ignoreCase = true) ||
                             savedUid == "admin_ullas" ||
                             sessionPrefs.getBoolean("is_admin", false)
                     if (!isAdminSession) {
                         val blockCheck = FirebaseService.checkIfUserIsBlocked(savedUid)
-                        val emailCheck = if (savedEmail.isNotBlank()) FirebaseService.checkIfUserIsBlocked(savedEmail) else Pair(false, "")
+                        val emailCheck = if (savedEmailFinal.isNotBlank()) FirebaseService.checkIfUserIsBlocked(savedEmailFinal) else Pair(false, "")
                         if (blockCheck.first || emailCheck.first) {
                             val reason = if (blockCheck.first) blockCheck.second else emailCheck.second
                             logout()
-                            _blockedAccountAlert.value = Pair(savedEmail, reason.ifBlank { "Account blocked by Administrator." })
+                            _blockedAccountAlert.value = Pair(savedEmailFinal, reason.ifBlank { "Account blocked by Administrator." })
                         } else {
                             val remoteProfile = FirebaseService.getUserProfileOnce(savedUid)
                             if (remoteProfile != null) {
                                 if (remoteProfile.isBlocked) {
                                     logout()
-                                    _blockedAccountAlert.value = Pair(savedEmail, remoteProfile.blockReason.ifBlank { "Account blocked by Administrator." })
+                                    _blockedAccountAlert.value = Pair(savedEmailFinal, remoteProfile.blockReason.ifBlank { "Account blocked by Administrator." })
                                 } else {
                                     _userProfile.value = remoteProfile
                                 }
@@ -941,11 +941,8 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
             }
         }
 
-        // Automatically trigger live Gemini AI schedule sync for KEA counselling dates (without spam notifications)
-        syncKeaScheduleWithGemini()
-
         // Clean up any historical KEA schedule update spam notifications from Firestore completely
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             FirebaseService.cleanupScheduleSpamNotifications()
         }
 
@@ -1092,8 +1089,8 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
             }
         }
 
-        // Start observation immediately if already logged in from saved session
-        if (sessionPrefs.getBoolean("is_logged_in", false)) {
+        // Start observation immediately if already logged in from saved session (only if not already started)
+        if (sessionPrefs.getBoolean("is_logged_in", false) && currentFbUser == null) {
             val savedUid = sessionPrefs.getString("user_uid", "") ?: ""
             val savedEmail = sessionPrefs.getString("user_email", "") ?: ""
             if (savedUid.isNotBlank() || savedEmail.isNotBlank()) {

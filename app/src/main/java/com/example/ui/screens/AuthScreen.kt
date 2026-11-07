@@ -2346,8 +2346,12 @@ fun handleGoogleSignIn(
     onLoadingStateChange(true)
     onErrorStateChange(null)
 
-    val credentialManager = CredentialManager.create(context)
-    val webClientId = getWebClientId(context)
+    val activityContext = context.findActivity() ?: context
+    val credentialManager = CredentialManager.create(activityContext)
+    val webClientId = getWebClientId(activityContext)
+
+    val signInWithGoogleOption = com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption.Builder(webClientId)
+        .build()
 
     val googleIdOption = GetGoogleIdOption.Builder()
         .setFilterByAuthorizedAccounts(false)
@@ -2356,12 +2360,13 @@ fun handleGoogleSignIn(
         .build()
 
     val request = GetCredentialRequest.Builder()
+        .addCredentialOption(signInWithGoogleOption)
         .addCredentialOption(googleIdOption)
         .build()
 
     coroutineScope.launch {
         try {
-            val result = credentialManager.getCredential(request = request, context = context)
+            val result = credentialManager.getCredential(request = request, context = activityContext)
             val credential = result.credential
             if (credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
@@ -2381,14 +2386,6 @@ fun handleGoogleSignIn(
                         val blockCheck = FirebaseService.checkIfUserIsBlocked(uid)
                         val emailBlockCheck = if (email.isNotBlank()) FirebaseService.checkIfUserIsBlocked(email) else Pair(false, "")
 
-                        if (!firebaseUser.isEmailVerified) {
-                             try { FirebaseService.auth.signOut() } catch (_: Exception) {}
-                             onLoadingStateChange(false)
-                             onErrorStateChange("⚠️ Email not verified. Please verify your email before logging in.")
-                             Toast.makeText(context, "⚠️ Email not verified.", Toast.LENGTH_LONG).show()
-                             return@launch
-                        }
-
                         if (existingProfile?.isBlocked == true || blockCheck.first || emailBlockCheck.first) {
                             try { FirebaseService.auth.signOut() } catch (_: Exception) {}
                             onLoadingStateChange(false)
@@ -2396,7 +2393,7 @@ fun handleGoogleSignIn(
                             val userMsg = "Account Blocked: Access restricted by Administrator. Contact admin to unblock."
                             onErrorStateChange(userMsg)
                             onBlocked(email.ifBlank { name }, reason)
-                            Toast.makeText(context, "🚫 Account Blocked: Contact admin to unblock.", Toast.LENGTH_LONG).show()
+                            Toast.makeText(activityContext, "🚫 Account Blocked: Contact admin to unblock.", Toast.LENGTH_LONG).show()
                             return@launch
                         }
 
@@ -2424,46 +2421,46 @@ fun handleGoogleSignIn(
                         )
 
                         onLoadingStateChange(false)
-                        Toast.makeText(context, "Signed in as $name", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(activityContext, "Signed in as $name", Toast.LENGTH_SHORT).show()
                         onSuccess(email, name)
                     } else {
                         onLoadingStateChange(false)
                         val msg = "Google Sign-In failed: Unable to get user account."
                         onErrorStateChange(msg)
-                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                        Toast.makeText(activityContext, msg, Toast.LENGTH_LONG).show()
                     }
                 } else {
                     onLoadingStateChange(false)
                     val err = authResult.exceptionOrNull()?.localizedMessage ?: "Firebase Authentication failed"
                     val msg = "Google Sign-In failed: $err"
                     onErrorStateChange(msg)
-                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                    Toast.makeText(activityContext, msg, Toast.LENGTH_LONG).show()
                 }
             } else {
                 onLoadingStateChange(false)
                 val msg = "Unexpected credential format returned."
                 onErrorStateChange(msg)
-                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                Toast.makeText(activityContext, msg, Toast.LENGTH_SHORT).show()
             }
         } catch (e: GetCredentialCancellationException) {
             onLoadingStateChange(false)
             onErrorStateChange(null)
-            Toast.makeText(context, "Google Sign-In cancelled.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(activityContext, "Google Sign-In cancelled.", Toast.LENGTH_SHORT).show()
         } catch (e: GetCredentialException) {
             onLoadingStateChange(false)
             val errMsg = e.localizedMessage ?: "Google Sign-In failed."
-            val userMsg = if (errMsg.contains("No credentials available")) {
-                "No Google accounts found on device."
+            val userMsg = if (errMsg.contains("No credentials available", ignoreCase = true) || errMsg.contains("No google accounts", ignoreCase = true)) {
+                "No Google accounts found or selected on this device. Please ensure a Google account is added in Android Settings > Accounts or try Email Sign-In."
             } else {
                 "Google Sign-In failed: $errMsg"
             }
             onErrorStateChange(userMsg)
-            Toast.makeText(context, userMsg, Toast.LENGTH_LONG).show()
+            Toast.makeText(activityContext, userMsg, Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             onLoadingStateChange(false)
             val errMsg = e.localizedMessage ?: "Authentication error."
             onErrorStateChange(errMsg)
-            Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
+            Toast.makeText(activityContext, errMsg, Toast.LENGTH_LONG).show()
         }
     }
 }

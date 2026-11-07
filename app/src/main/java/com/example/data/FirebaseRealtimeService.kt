@@ -1071,12 +1071,12 @@ object FirebaseRealtimeService {
         val mentorsRef = database.getReference("registeredMentors").child(mentorId)
 
         CoroutineScope(Dispatchers.IO).launch {
-            try { FirebaseService.deleteSeniorMentorFromFirestore(mentorName) } catch (_: Exception) {}
-        }
-
-        mentorsRef.removeValue().addOnCompleteListener { task ->
-            if (continuation.isActive) {
-                continuation.resume(true)
+            val fsResult = try { FirebaseService.deleteSeniorMentorFromFirestore(mentorName) } catch (e: Exception) { false }
+            
+            mentorsRef.removeValue().addOnCompleteListener { task ->
+                if (continuation.isActive) {
+                    continuation.resume(task.isSuccessful || fsResult)
+                }
             }
         }
     }

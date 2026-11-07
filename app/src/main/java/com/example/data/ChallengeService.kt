@@ -892,15 +892,20 @@ object ChallengeService {
     }
 
     suspend fun toggleQuestionSetStatus(setId: String, isActive: Boolean): Result<Boolean> {
+        Log.d(TAG, "Toggling set $setId to $isActive")
         return try {
             val set = localQuestionSets[setId]
             if (set != null) {
                 val updated = set.copy(isActive = isActive)
                 localQuestionSets[setId] = updated
                 firestore.collection("challengeQuestionSets").document(setId).update("isActive", isActive).await()
+                Log.d(TAG, "Toggle successful for $setId")
+            } else {
+                Log.e(TAG, "Question set $setId not found in local memory")
             }
             Result.success(true)
         } catch (e: Exception) {
+            Log.e(TAG, "Error toggling question set status: ${e.message}")
             Result.failure(e)
         }
     }

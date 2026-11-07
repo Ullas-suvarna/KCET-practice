@@ -1465,7 +1465,7 @@ private fun AdminScreenScope.AdminPanelContent() {
                         Text("Existing Question Bank (${questions.size})", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                     }
 
-                    items(questions) { q ->
+                    items(questions, key = { it.id }) { q ->
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(14.dp)
@@ -9356,9 +9356,12 @@ private fun AdminScreenScope.AdminPanelContent() {
                         val name = mentorRemoving.name
                         mentorToDelete = null
                         scope.launch {
-                            FirebaseRealtimeService.deleteSeniorMentor(name)
-                            FirebaseService.deleteSeniorMentorFromFirestore(name)
-                            Toast.makeText(context, "Mentor '$name' removed successfully", Toast.LENGTH_SHORT).show()
+                            val isDeleted = FirebaseRealtimeService.deleteSeniorMentor(name)
+                            if (isDeleted) {
+                                Toast.makeText(context, "Mentor '$name' removed successfully", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "Failed to remove mentor '$name'. Please try again.", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626))
