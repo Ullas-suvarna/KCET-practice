@@ -2095,8 +2095,8 @@ fun SubjectPerformanceBreakdown(
                 val barColor = when (subj.subject) {
                     Subject.PHYSICS -> Color(0xFF3B82F6)
                     Subject.CHEMISTRY -> Color(0xFFEC4899)
-                    Subject.MATHEMATICS -> Color(0xFF8B5CF6)
-                    Subject.BIOLOGY -> Color(0xFF10B981)
+                    Subject.MATHEMATICS, Subject.MATH, Subject.MATHS -> Color(0xFF8B5CF6)
+                    Subject.BIOLOGY, Subject.BIO -> Color(0xFF10B981)
                 }
 
                 Column(modifier = Modifier.padding(vertical = 6.dp)) {

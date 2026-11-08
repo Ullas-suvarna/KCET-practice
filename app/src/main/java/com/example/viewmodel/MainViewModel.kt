@@ -2896,7 +2896,7 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         // Calculate Subject Analytics Breakdown
         val physicsQs = questions.filter { it.subject == Subject.PHYSICS }
         val chemistryQs = questions.filter { it.subject == Subject.CHEMISTRY }
-        val mathQs = questions.filter { it.subject == Subject.MATHEMATICS }
+        val mathQs = questions.filter { it.subject.isMath }
 
         val phyCorrect = physicsQs.count { answers[it.id]?.selectedOption == it.correctOption }
         val chemCorrect = chemistryQs.count { answers[it.id]?.selectedOption == it.correctOption }
@@ -3714,6 +3714,8 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         initialValue = com.example.data.SampleChallengeQuestionSets.initialSets
     )
 
+    val questionSets: StateFlow<List<com.example.data.ChallengeQuestionSet>> get() = challengeQuestionSets
+
     fun send1v1Challenge(
         opponent: LeaderboardEntry,
         challengeType: com.example.data.ChallengeType,
@@ -3830,10 +3832,14 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun adminToggleQuestionSetStatus(setId: String, isActive: Boolean) {
+    fun onToggleQuestionSet(setId: String, active: Boolean) {
         viewModelScope.launch {
-            com.example.data.ChallengeService.toggleQuestionSetStatus(setId, isActive)
+            com.example.data.ChallengeService.toggleQuestionSetStatus(setId, active)
         }
+    }
+
+    fun adminToggleQuestionSetStatus(setId: String, isActive: Boolean) {
+        onToggleQuestionSet(setId, isActive)
     }
 
     fun adminDeleteQuestionSet(setId: String) {

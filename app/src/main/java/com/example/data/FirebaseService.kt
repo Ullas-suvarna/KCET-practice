@@ -3926,5 +3926,15 @@ object FirebaseService {
             Log.e(TAG, "Error saving admin pricing: ${e.message}")
         }
     }
+
+    // -------------------------------------------------------------
+    // 1v1 PCM CHALLENGE QUESTION SETS (Real-Time Firestore Listener)
+    // -------------------------------------------------------------
+    fun observeChallengeQuestionSets(): Flow<List<ChallengeQuestionSet>> =
+        ChallengeService.observeQuestionSets()
+
+    suspend fun toggleQuestionSet(setId: String, isActive: Boolean): Boolean {
+        return ChallengeService.toggleQuestionSetStatus(setId, isActive).isSuccess
+    }
 }
 

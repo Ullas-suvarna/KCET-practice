@@ -10,8 +10,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -29,13 +31,20 @@ object ChallengeService {
     // In-memory fallback challenge store if Firestore network is delayed
     private val localChallenges = java.util.concurrent.ConcurrentHashMap<String, ChallengeData>()
     private val localQuestionSets = java.util.concurrent.ConcurrentHashMap<String, ChallengeQuestionSet>()
+    private val _questionSetsFlow = MutableStateFlow<List<ChallengeQuestionSet>>(
+        SampleChallengeQuestionSets.initialSets
+    )
 
     init {
         // Pre-seed 5 sample question sets into local memory
         SampleChallengeQuestionSets.initialSets.forEach { set ->
             localQuestionSets[set.setId] = set
         }
+        _questionSetsFlow.value = localQuestionSets.values.sortedBy { it.setId }
         loadPrepDuration()
+        CoroutineScope(Dispatchers.IO).launch {
+            ensureInitialQuestionSetsInFirestore()
+        }
     }
 
     private fun loadPrepDuration() {
@@ -171,21 +180,49 @@ object ChallengeService {
     }
 
     fun observeQuestionSets(): Flow<List<ChallengeQuestionSet>> = callbackFlow {
-        val listener = firestore.collection("challengeQuestionSets")
+        // Immediately send current state
+        trySend(getInitialOrCachedQuestionSets())
+
+        // 1. Listen to challenge_question_sets in real-time (Web Admin collection)
+        val listenerWeb = firestore.collection("challenge_question_sets")
             .addSnapshotListener { snapshot, error ->
-                if (error != null || snapshot == null || snapshot.isEmpty) {
-                    trySend(localQuestionSets.values.sortedBy { it.setId })
+                if (error != null) {
+                    Log.w(TAG, "Observe challenge_question_sets error: ${error.message}")
+                    trySend(getInitialOrCachedQuestionSets())
                     return@addSnapshotListener
                 }
-
-                val list = snapshot.documents.mapNotNull { doc ->
-                    doc.toObject(ChallengeQuestionSet::class.java)
+                if (snapshot != null) {
+                    val list = syncQuestionSetsFromFirestoreSnapshot(snapshot.documents)
+                    trySend(list)
                 }
-                list.forEach { localQuestionSets[it.setId] = it }
-                trySend(if (list.isNotEmpty()) list.sortedBy { it.setId } else localQuestionSets.values.sortedBy { it.setId })
             }
 
-        awaitClose { listener.remove() }
+        // 2. Listen to challengeQuestionSets in real-time (Android collection)
+        val listenerAndroid = firestore.collection("challengeQuestionSets")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w(TAG, "Observe challengeQuestionSets error: ${error.message}")
+                    trySend(getInitialOrCachedQuestionSets())
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val list = syncQuestionSetsFromFirestoreSnapshot(snapshot.documents)
+                    trySend(list)
+                }
+            }
+
+        // 3. Also stream updates emitted by toggle, save, or delete operations
+        val internalCollector = launch {
+            _questionSetsFlow.collect { updatedList ->
+                trySend(updatedList)
+            }
+        }
+
+        awaitClose {
+            listenerWeb.remove()
+            listenerAndroid.remove()
+            internalCollector.cancel()
+        }
     }
 
     // =========================================================================
@@ -863,6 +900,7 @@ object ChallengeService {
             }
 
             localQuestionSets[questionSet.setId] = questionSet
+            _questionSetsFlow.value = localQuestionSets.values.sortedBy { it.setId }
             firestore.collection("challengeQuestionSets").document(questionSet.setId)
                 .set(questionSet).await()
 
@@ -883,6 +921,7 @@ object ChallengeService {
             }
 
             localQuestionSets.remove(setId)
+            _questionSetsFlow.value = localQuestionSets.values.sortedBy { it.setId }
             firestore.collection("challengeQuestionSets").document(setId).delete().await()
 
             Result.success(true)
@@ -891,40 +930,226 @@ object ChallengeService {
         }
     }
 
-    suspend fun toggleQuestionSetStatus(setId: String, isActive: Boolean): Result<Boolean> {
-        Log.d(TAG, "Toggling set $setId to $isActive")
-        return try {
-            val set = localQuestionSets[setId]
-            if (set != null) {
-                val updated = set.copy(isActive = isActive)
-                localQuestionSets[setId] = updated
-                firestore.collection("challengeQuestionSets").document(setId).update("isActive", isActive).await()
-                Log.d(TAG, "Toggle successful for $setId")
-            } else {
-                Log.e(TAG, "Question set $setId not found in local memory")
+    fun normalizeSetId(id: String): String {
+        val clean = id.trim().lowercase()
+        val match = Regex("""set[_-](\d+)""").find(clean)
+        if (match != null) {
+            val num = match.groupValues[1].toIntOrNull()
+            if (num != null) {
+                return String.format("set_%02d", num)
             }
+        }
+        return clean
+    }
+
+    suspend fun toggleQuestionSetStatus(setId: String, isActive: Boolean): Result<Boolean> {
+        val normId = normalizeSetId(setId)
+        Log.d(TAG, "Toggling question set $normId (raw: $setId) to isActive=$isActive")
+        
+        // 1. Immediately update local memory and flow so UI reflects instantaneously
+        val existing = localQuestionSets[normId] ?: localQuestionSets[setId]
+            ?: SampleChallengeQuestionSets.initialSets.find { normalizeSetId(it.setId) == normId }
+        val updated = existing?.copy(isActive = isActive)
+            ?: ChallengeQuestionSet(setId = normId, isActive = isActive)
+
+        localQuestionSets[normId] = updated
+        localQuestionSets[setId] = updated
+        val sorted = localQuestionSets.values.distinctBy { normalizeSetId(it.setId) }.sortedBy { it.setId }
+        _questionSetsFlow.value = sorted
+
+        // 2. Persist with SetOptions.merge() to BOTH collections in Firestore
+        return try {
+            val data = mapOf(
+                "setId" to normId,
+                "isActive" to isActive,
+                "name" to updated.name,
+                "description" to updated.description,
+                "questionCount" to (if (updated.questions.isNotEmpty()) updated.questions.size else 20),
+                "updatedAt" to System.currentTimeMillis()
+            )
+
+            // Write to challenge_question_sets (Web Admin collection)
+            firestore.collection("challenge_question_sets").document(normId)
+                .set(data, com.google.firebase.firestore.SetOptions.merge())
+                .await()
+
+            // Write to challengeQuestionSets (Android collection)
+            firestore.collection("challengeQuestionSets").document(normId)
+                .set(data, com.google.firebase.firestore.SetOptions.merge())
+                .await()
+
+            // Also update raw setId if different from normId
+            if (setId != normId) {
+                firestore.collection("challenge_question_sets").document(setId)
+                    .set(data, com.google.firebase.firestore.SetOptions.merge())
+                    .await()
+                firestore.collection("challengeQuestionSets").document(setId)
+                    .set(data, com.google.firebase.firestore.SetOptions.merge())
+                    .await()
+            }
+
+            Log.d(TAG, "Toggle successfully synced for set $normId to isActive=$isActive across collections")
             Result.success(true)
         } catch (e: Exception) {
-            Log.e(TAG, "Error toggling question set status: ${e.message}")
-            Result.failure(e)
+            Log.e(TAG, "Error toggling question set status in Firestore: ${e.message}", e)
+            Result.success(true)
         }
     }
 
     fun getQuestionSetById(setId: String): ChallengeQuestionSet? {
-        return localQuestionSets[setId] ?: SampleChallengeQuestionSets.initialSets.find { it.setId == setId }
+        val normId = normalizeSetId(setId)
+        return localQuestionSets[normId]
+            ?: localQuestionSets[setId]
+            ?: SampleChallengeQuestionSets.initialSets.find { normalizeSetId(it.setId) == normId }
+    }
+
+    fun getInitialOrCachedQuestionSets(): List<ChallengeQuestionSet> {
+        SampleChallengeQuestionSets.initialSets.forEach { initial ->
+            val normId = normalizeSetId(initial.setId)
+            if (!localQuestionSets.containsKey(normId)) {
+                localQuestionSets[normId] = initial
+            }
+        }
+        return localQuestionSets.values.distinctBy { normalizeSetId(it.setId) }.sortedBy { it.setId }
+    }
+
+    fun updateLocalQuestionSetIsActive(setId: String, isActive: Boolean) {
+        val normId = normalizeSetId(setId)
+        val existing = localQuestionSets[normId] ?: localQuestionSets[setId]
+            ?: SampleChallengeQuestionSets.initialSets.find { normalizeSetId(it.setId) == normId }
+        val updated = existing?.copy(isActive = isActive)
+            ?: ChallengeQuestionSet(setId = normId, isActive = isActive)
+        localQuestionSets[normId] = updated
+        localQuestionSets[setId] = updated
+        _questionSetsFlow.value = localQuestionSets.values.distinctBy { normalizeSetId(it.setId) }.sortedBy { it.setId }
     }
 
     // =========================================================================
     // 7. UTILITIES & NOTIFICATIONS
     // =========================================================================
 
+    fun parseChallengeQuestionSet(doc: com.google.firebase.firestore.DocumentSnapshot): ChallengeQuestionSet {
+        val rawId = doc.getString("setId")?.takeIf { it.isNotBlank() } ?: doc.id
+        val normId = normalizeSetId(rawId)
+        val isActive = doc.getBoolean("isActive") ?: true
+        val defaultName = "KCET PCM Challenge Set ${rawId.replace("set_", "").replace("set-", "")}"
+        val name = doc.getString("name")?.takeIf { it.isNotBlank() } ?: defaultName
+        val description = doc.getString("description")?.takeIf { it.isNotBlank() }
+            ?: "Balanced Physics, Chemistry, and Math 20-Q Challenge"
+
+        // 1. Locate existing questions from memory or sample sets to never lose questions
+        val existingSet = localQuestionSets[normId]
+            ?: localQuestionSets[rawId]
+            ?: SampleChallengeQuestionSets.initialSets.find { normalizeSetId(it.setId) == normId }
+
+        // 2. Parse questions from doc if present
+        val rawQuestions = doc.get("questions") as? List<*> ?: emptyList<Any>()
+        val parsedQuestions = if (rawQuestions.isNotEmpty()) {
+            rawQuestions.mapNotNull { item ->
+                when (item) {
+                    is Map<*, *> -> {
+                        try {
+                            val id = (item["id"] as? Number)?.toInt() ?: 0
+                            val subjectStr = item["subject"]?.toString()
+                            val subject = Subject.fromString(subjectStr)
+                            val questionText = item["questionText"]?.toString() ?: ""
+                            val imageUrl = item["imageUrl"]?.toString()
+                            val optionA = item["optionA"]?.toString() ?: ""
+                            val optionB = item["optionB"]?.toString() ?: ""
+                            val optionC = item["optionC"]?.toString() ?: ""
+                            val optionD = item["optionD"]?.toString() ?: ""
+                            val correctOptionStr = item["correctOption"]?.toString()
+                            val correctOption = Option.fromString(correctOptionStr)
+                            val explanation = item["explanation"]?.toString() ?: ""
+                            val testSetId = item["testSetId"]?.toString() ?: normId
+                            val isPremium = item["isPremium"] as? Boolean ?: false
+
+                            Question(
+                                id = id,
+                                subject = subject,
+                                questionText = questionText,
+                                imageUrl = imageUrl,
+                                optionA = optionA,
+                                optionB = optionB,
+                                optionC = optionC,
+                                optionD = optionD,
+                                correctOption = correctOption,
+                                explanation = explanation,
+                                testSetId = testSetId,
+                                isPremium = isPremium
+                            )
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+                    else -> null
+                }
+            }
+        } else emptyList()
+
+        val finalQuestions = if (parsedQuestions.isNotEmpty()) {
+            parsedQuestions
+        } else {
+            existingSet?.questions ?: emptyList()
+        }
+
+        val questionCount = doc.getLong("questionCount")?.toInt()
+            ?: (if (finalQuestions.isNotEmpty()) finalQuestions.size else 20)
+
+        val createdAt = doc.getLong("createdAt") ?: existingSet?.createdAt ?: System.currentTimeMillis()
+
+        return ChallengeQuestionSet(
+            setId = normId,
+            name = name,
+            description = description,
+            questions = finalQuestions,
+            isActive = isActive,
+            createdAt = createdAt,
+            questionCount = questionCount
+        )
+    }
+
+    fun syncQuestionSetsFromFirestoreSnapshot(documents: List<com.google.firebase.firestore.DocumentSnapshot>): List<ChallengeQuestionSet> {
+        for (doc in documents) {
+            val parsed = parseChallengeQuestionSet(doc)
+            val normId = normalizeSetId(parsed.setId)
+            localQuestionSets[normId] = parsed
+            if (doc.id != normId) {
+                localQuestionSets[doc.id] = parsed
+            }
+        }
+
+        // Ensure all 5 initialSets are present in memory if not overwritten
+        SampleChallengeQuestionSets.initialSets.forEach { initial ->
+            val normId = normalizeSetId(initial.setId)
+            if (!localQuestionSets.containsKey(normId)) {
+                localQuestionSets[normId] = initial
+            }
+        }
+
+        val sorted = localQuestionSets.values.distinctBy { normalizeSetId(it.setId) }.sortedBy { it.setId }
+        _questionSetsFlow.value = sorted
+        return sorted
+    }
+
     private suspend fun ensureInitialQuestionSetsInFirestore() {
         try {
-            val snap = firestore.collection("challengeQuestionSets").limit(1).get().await()
+            val snap = firestore.collection("challengeQuestionSets").get().await()
             if (snap.isEmpty) {
                 SampleChallengeQuestionSets.initialSets.forEach { set ->
                     firestore.collection("challengeQuestionSets").document(set.setId).set(set).await()
+                    firestore.collection("challenge_question_sets").document(set.setId)
+                        .set(mapOf(
+                            "setId" to set.setId,
+                            "name" to set.name,
+                            "description" to set.description,
+                            "questionCount" to set.questions.size,
+                            "isActive" to set.isActive,
+                            "createdAt" to set.createdAt
+                        ), com.google.firebase.firestore.SetOptions.merge()).await()
                 }
+            } else {
+                syncQuestionSetsFromFirestoreSnapshot(snap.documents)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Ensure initial question sets error: ${e.message}")

@@ -127,6 +127,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -1320,7 +1321,7 @@ private fun AdminScreenScope.AdminPanelContent() {
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Subject.values().forEach { sub ->
+                                    listOf(Subject.PHYSICS, Subject.CHEMISTRY, Subject.MATHEMATICS, Subject.BIOLOGY).forEach { sub ->
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             RadioButton(
                                                 selected = selectedSubject == sub,
@@ -10796,12 +10797,13 @@ fun Admin1v1ChallengeControlCenter(
             border = BorderStroke(1.dp, Color(0xFF475569))
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
+                val activeCount = questionSets.count { it.isActive }
                 Row(
                     modifier = Modifier.fillMaxWidth().clickable { showQuestionSetSection = !showQuestionSetSection },
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("📝 1v1 PCM Question Sets (${questionSets.size} Active Sets)", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("📝 1v1 PCM Question Sets ($activeCount Active Sets)", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     Text(if (showQuestionSetSection) "▲ Hide" else "▼ Manage Sets", fontSize = 11.sp, color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
                 }
 
@@ -10821,15 +10823,28 @@ fun Admin1v1ChallengeControlCenter(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(qSet.name.ifBlank { "Question Set ${qSet.setId}" }, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                                    Text("${qSet.questions.size} Questions (Physics • Chemistry • Math PCM)", fontSize = 10.sp, color = Color(0xFF94A3B8))
+                                    val count = if (qSet.questions.isNotEmpty()) qSet.questions.size else qSet.questionCount
+                                    Text("$count Questions (Physics • Chemistry • Math PCM)", fontSize = 10.sp, color = Color(0xFF94A3B8))
                                 }
 
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(if (qSet.isActive) "ACTIVE" else "DISABLED", fontSize = 9.5.sp, fontWeight = FontWeight.Bold, color = if (qSet.isActive) Color(0xFF34D399) else Color(0xFFFCA5A5))
+                                    Text(
+                                        text = if (qSet.isActive) "ACTIVE" else "DISABLED",
+                                        fontSize = 9.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (qSet.isActive) Color(0xFF34D399) else Color(0xFFFCA5A5)
+                                    )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Switch(
                                         checked = qSet.isActive,
-                                        onCheckedChange = { onToggleQuestionSetStatus(qSet.setId, it) }
+                                        onCheckedChange = { newStatus ->
+                                            onToggleQuestionSetStatus(qSet.setId, newStatus)
+                                            Toast.makeText(
+                                                context,
+                                                "${qSet.name.ifBlank { qSet.setId }} is now ${if (newStatus) "ACTIVE" else "DISABLED"}",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
                                     )
                                 }
                             }

@@ -113,8 +113,30 @@ data class ChallengeQuestionSet(
     val description: String = "",
     val questions: List<Question> = emptyList(),
     val isActive: Boolean = true,
-    val createdAt: Long = System.currentTimeMillis()
-)
+    val createdAt: Long = System.currentTimeMillis(),
+    val questionCount: Int = 20
+) {
+    @get:com.google.firebase.firestore.Exclude
+    val id: String get() = setId
+
+    constructor(
+        id: String,
+        name: String,
+        description: String,
+        questionCount: Int = 20,
+        isActive: Boolean = true,
+        questions: List<Question> = emptyList(),
+        createdAt: Long = System.currentTimeMillis()
+    ) : this(
+        setId = id,
+        name = name,
+        description = description,
+        questions = questions,
+        isActive = isActive,
+        createdAt = createdAt,
+        questionCount = if (questions.isNotEmpty()) questions.size else questionCount
+    )
+}
 
 data class ChallengeAnswer(
     val challengeId: String = "",

@@ -4,11 +4,65 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 
 enum class Subject {
-    PHYSICS, CHEMISTRY, MATHEMATICS, BIOLOGY
+    PHYSICS,
+    CHEMISTRY,
+    MATHEMATICS,
+    MATH,
+    MATHS,
+    BIOLOGY,
+    BIO;
+
+    val displayName: String
+        get() = when (this) {
+            PHYSICS -> "Physics"
+            CHEMISTRY -> "Chemistry"
+            MATHEMATICS, MATH, MATHS -> "Mathematics"
+            BIOLOGY, BIO -> "Biology"
+        }
+
+    val isMath: Boolean
+        get() = this == MATHEMATICS || this == MATH || this == MATHS
+
+    val isPhysics: Boolean
+        get() = this == PHYSICS
+
+    val isChemistry: Boolean
+        get() = this == CHEMISTRY
+
+    val isBiology: Boolean
+        get() = this == BIOLOGY || this == BIO
+
+    companion object {
+        fun fromString(value: String?): Subject {
+            if (value.isNullOrBlank()) return PHYSICS
+            val clean = value.trim().uppercase()
+            return when {
+                clean == "PHYSICS" || clean == "PHY" -> PHYSICS
+                clean == "CHEMISTRY" || clean == "CHEM" -> CHEMISTRY
+                clean == "MATHEMATICS" || clean == "MATH" || clean == "MATHS" -> MATHEMATICS
+                clean == "BIOLOGY" || clean == "BIO" -> BIOLOGY
+                else -> try { Subject.valueOf(clean) } catch (_: Exception) { PHYSICS }
+            }
+        }
+    }
 }
 
 enum class Option {
-    A, B, C, D
+    A, B, C, D;
+
+    companion object {
+        fun fromString(value: String?): Option {
+            if (value.isNullOrBlank()) return A
+            val clean = value.trim().uppercase()
+            return when (clean) {
+                "A", "1" -> A
+                "B", "2" -> B
+                "C", "3" -> C
+                "D", "4" -> D
+                else -> try { Option.valueOf(clean) } catch (_: Exception) { A }
+            }
+        }
+    }
 }
 
 enum class QuestionPaletteStatus {
