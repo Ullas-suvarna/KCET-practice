@@ -1,0 +1,19 @@
+{
+  "rules": {
+    "admin_config": {
+      "maintenance": {
+        ".read": true,
+        ".write": "auth != null && auth.token.email === 'ullassuvarna65@gmail.com' && auth.token.email_verified === true",
+        ".validate": "newData.hasChildren(['maintenanceEnabled', 'maintenanceStartTime', 'maintenanceEndTime', 'updatedAt', 'updatedBy']) && newData.child('maintenanceEnabled').isBoolean() && newData.child('maintenanceStartTime').isNumber() && newData.child('maintenanceEndTime').isNumber() && newData.child('updatedAt').isNumber() && newData.child('updatedBy').isString() && (!newData.child('maintenanceEnabled').val() || (newData.child('maintenanceStartTime').val() > 0 && newData.child('maintenanceEndTime').val() > newData.child('maintenanceStartTime').val()))"
+      },
+      "system_status": {
+        ".read": true,
+        ".write": "auth != null && auth.token.email === 'ullassuvarna65@gmail.com' && auth.token.email_verified === true"
+      },
+      "pricing": {
+        ".read": true,
+        ".write": "auth != null && auth.token.email === 'ullassuvarna65@gmail.com' && auth.token.email_verified === true"
+      }
+    }
+  }
+}

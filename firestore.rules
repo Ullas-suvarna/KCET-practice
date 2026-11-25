@@ -1,0 +1,126 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAuthorizedAdmin() {
+      return isSignedIn()
+        && request.auth.token.email == "ullassuvarna65@gmail.com"
+        && request.auth.token.email_verified == true;
+    }
+
+    function isValidMaintenancePayload() {
+      let data = request.resource.data;
+      return data.maintenanceEnabled is bool
+        && data.maintenanceStartTime is int
+        && data.maintenanceEndTime is int
+        && data.updatedAt is int
+        && data.updatedBy is string
+        && (!data.maintenanceEnabled || (data.maintenanceStartTime > 0 && data.maintenanceEndTime > data.maintenanceStartTime));
+    }
+
+    // Global App-Wide Maintenance Mode document:
+    // Publicly readable so logged-out, new, and active students enforce maintenance before any screen.
+    // Strictly writable ONLY by the verified Admin account.
+    match /admin_config/maintenance {
+      allow read: if true;
+      allow create, update: if isAuthorizedAdmin() && isValidMaintenancePayload();
+      allow delete: if false;
+    }
+
+    // Other admin configuration documents (shutdown status, pricing, system security key)
+    match /admin_config/{docId} {
+      allow read: if docId != "system_security_key" || isAuthorizedAdmin();
+      allow write: if isAuthorizedAdmin();
+    }
+
+    // User profile & private collections
+    match /user_accounts/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAuthorizedAdmin());
+      allow write: if isSignedIn() && (request.auth.uid == userId || isAuthorizedAdmin());
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAuthorizedAdmin());
+      allow write: if isSignedIn() && (request.auth.uid == userId || isAuthorizedAdmin());
+    }
+
+    match /user_bookmarks/{docId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /user_badges/{docId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /badges/{docId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /test_results/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /leaderboard/{userId} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    match /notifications/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAuthorizedAdmin();
+    }
+
+    // Read-only public educational content, writable only by Admin
+    match /questions/{docId} {
+      allow read: if true;
+      allow write: if isAuthorizedAdmin();
+    }
+    match /test_series_sets/{docId} {
+      allow read: if true;
+      allow write: if isAuthorizedAdmin();
+    }
+    match /announcements/{docId} {
+      allow read: if true;
+      allow write: if isAuthorizedAdmin();
+    }
+    match /resources/{docId} {
+      allow read: if true;
+      allow write: if isAuthorizedAdmin();
+    }
+    match /important_dates/{docId} {
+      allow read: if true;
+      allow write: if isAuthorizedAdmin();
+    }
+    match /rank_vs_marks/{docId} {
+      allow read: if true;
+      allow write: if isAuthorizedAdmin();
+    }
+    match /colleges/{docId} {
+      allow read: if true;
+      allow write: if isAuthorizedAdmin();
+    }
+    match /branch_cutoffs/{docId} {
+      allow read: if true;
+      allow write: if isAuthorizedAdmin();
+    }
+    match /engineering_branches/{docId} {
+      allow read: if true;
+      allow write: if isAuthorizedAdmin();
+    }
+    match /helplines/{docId} {
+      allow read: if true;
+      allow write: if isAuthorizedAdmin();
+    }
+
+    // Default deny for everything else unless Admin
+    match /{document=**} {
+      allow read, write: if isAuthorizedAdmin();
+    }
+  }
+}

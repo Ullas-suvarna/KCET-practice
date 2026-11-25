@@ -37,7 +37,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -59,6 +61,15 @@ import android.content.Context
 import com.example.data.SavedRecommendationHistory
 import com.example.data.CollegeSampleData
 import com.example.data.doesCutoffMatchCollege
+import com.example.data.EmailDeliverySettings
+import com.example.data.EmailSettingsApiResult
+import com.example.data.EmailSettingsService
+import com.example.data.AdminEmailApiResult
+import com.example.data.AdminEmailLogItem
+import com.example.data.AdminEmailService
+import com.example.data.AdminRegisteredStudent
+import com.example.data.MaintenanceConfig
+import com.example.data.MaintenanceControlConfig
 
 enum class Screen {
     SPLASH, DEV_INTRO, ONBOARDING, AUTH, MAIN, EXAM, RESULT, ADMIN, SENIOR_CHAT, BOOKMARKS, NOTIFICATIONS, AI_RECOMMENDATION, BRANCH_EXPLORER, CHALLENGE
@@ -82,6 +93,39 @@ data class PendingExamInfo(
     val testSet: com.example.data.TestSeriesSet? = null,
     val bookmarkList: List<BookmarkEntity>? = null,
     val isFreeTest: Boolean = false
+)
+
+data class EmailDeliveryUiState(
+    val isLoading: Boolean = false,
+    val isUpdating: Boolean = false,
+    val settings: EmailDeliverySettings? = null,
+    val errorMessage: String? = null,
+    val successMessage: String? = null,
+    val firebaseAuthEmail: String? = null,
+    val isFirebaseEmailVerified: Boolean = false,
+    val isFirebaseSignedIn: Boolean = false
+)
+
+data class AdminEmailNotificationUiState(
+    val isFirebaseSignedIn: Boolean = false,
+    val firebaseAuthEmail: String? = null,
+    val isFirebaseEmailVerified: Boolean = false,
+    val students: List<AdminRegisteredStudent> = emptyList(),
+    val isLoadingStudents: Boolean = false,
+    val isStudentsLoaded: Boolean = false,
+    val studentsError: String? = null,
+    val searchQuery: String = "",
+    val selectedStudent: AdminRegisteredStudent? = null,
+    val subject: String = "",
+    val message: String = "",
+    val isSending: Boolean = false,
+    val sendSuccessMessage: String? = null,
+    val sendErrorMessage: String? = null,
+    val isSendTimeoutUncertain: Boolean = false,
+    val emailLogs: List<AdminEmailLogItem> = emptyList(),
+    val isLoadingLogs: Boolean = false,
+    val isLogsLoaded: Boolean = false,
+    val logsError: String? = null
 )
 
 class MainViewModel(val app: Application) : AndroidViewModel(app) {
@@ -197,7 +241,206 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
     private val _subscriptionPrice = MutableStateFlow(sessionPrefs.getInt("admin_subscription_price", 299))
     val subscriptionPrice: StateFlow<Int> = _subscriptionPrice.asStateFlow()
 
+    // Global System Shutdown, Firebase Security Key & Leaderboard Reset State
+    private val _isSystemShutdown = MutableStateFlow(prefs.getBoolean("system_shutdown_active", false))
+    val isSystemShutdown: StateFlow<Boolean> = _isSystemShutdown.asStateFlow()
+
+    private val _systemSecurityKey = MutableStateFlow(
+        prefs.getString("cached_system_security_key", com.example.data.SystemControlConfig.DEFAULT_SYSTEM_SECURITY_KEY)
+            ?: com.example.data.SystemControlConfig.DEFAULT_SYSTEM_SECURITY_KEY
+    )
+    val systemSecurityKey: StateFlow<String> = _systemSecurityKey.asStateFlow()
+
+    private val _isResettingLeaderboard = MutableStateFlow(false)
+    val isResettingLeaderboard: StateFlow<Boolean> = _isResettingLeaderboard.asStateFlow()
+
+    private var activeLeaderboardResetAt: Long = prefs.getLong("last_handled_leaderboard_reset_at", 0L)
+
+    // Global App-Wide Maintenance Mode State (Persisted across restarts in global prefs, synced live via Firestore + RTDB)
+    private fun loadCachedMaintenanceConfig(): MaintenanceConfig {
+        return MaintenanceConfig(
+            maintenanceEnabled = prefs.getBoolean("maintenance_enabled", false),
+            maintenanceStartTime = prefs.getLong("maintenance_start_time", 0L),
+            maintenanceEndTime = prefs.getLong("maintenance_end_time", 0L),
+            updatedAt = prefs.getLong("maintenance_updated_at", 0L),
+            updatedBy = prefs.getString("maintenance_updated_by", "").orEmpty()
+        )
+    }
+
+    private fun persistMaintenanceConfig(config: MaintenanceConfig) {
+        prefs.edit()
+            .putBoolean("maintenance_enabled", config.maintenanceEnabled)
+            .putLong("maintenance_start_time", config.maintenanceStartTime)
+            .putLong("maintenance_end_time", config.maintenanceEndTime)
+            .putLong("maintenance_updated_at", config.updatedAt)
+            .putString("maintenance_updated_by", config.updatedBy)
+            .apply()
+    }
+
+    private val _serverTimeOffsetMs = MutableStateFlow(prefs.getLong("maintenance_server_time_offset_ms", 0L))
+    val serverTimeOffsetMs: StateFlow<Long> = _serverTimeOffsetMs.asStateFlow()
+
+    private fun currentServerTimeMillis(): Long {
+        return System.currentTimeMillis() + _serverTimeOffsetMs.value
+    }
+
+    private val _maintenanceConfig = MutableStateFlow(loadCachedMaintenanceConfig())
+    val maintenanceConfig: StateFlow<MaintenanceConfig> = _maintenanceConfig.asStateFlow()
+
+    private val _maintenanceNowMs = MutableStateFlow(currentServerTimeMillis())
+    val maintenanceNowMs: StateFlow<Long> = _maintenanceNowMs.asStateFlow()
+
+    val isMaintenanceActive: StateFlow<Boolean> = combine(
+        _maintenanceConfig,
+        _maintenanceNowMs
+    ) { config, nowMs ->
+        config.isEffectivelyActive(nowMs)
+    }.distinctUntilChanged().stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = _maintenanceConfig.value.isEffectivelyActive(currentServerTimeMillis())
+    )
+
+    val maintenanceRemainingMillis: StateFlow<Long> = combine(
+        _maintenanceConfig,
+        _maintenanceNowMs
+    ) { config, nowMs ->
+        config.remainingMillis(nowMs)
+    }.distinctUntilChanged().stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = _maintenanceConfig.value.remainingMillis(currentServerTimeMillis())
+    )
+
+    private val _isUpdatingMaintenance = MutableStateFlow(false)
+    val isUpdatingMaintenance: StateFlow<Boolean> = _isUpdatingMaintenance.asStateFlow()
+
+    private val _maintenanceFeedback = MutableStateFlow<Pair<Boolean, String>?>(null)
+    val maintenanceFeedback: StateFlow<Pair<Boolean, String>?> = _maintenanceFeedback.asStateFlow()
+
+    private var lastAutoDisabledEndTime: Long = 0L
+
     init {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            FirebaseService.ensureSystemSecurityKeySeeded()
+        }
+
+        // Observe Firebase server time offset for drift-free synchronized maintenance countdowns
+        viewModelScope.launch {
+            FirebaseRealtimeService.observeServerTimeOffsetMs().collect { offsetMs ->
+                _serverTimeOffsetMs.value = offsetMs
+                prefs.edit().putLong("maintenance_server_time_offset_ms", offsetMs).apply()
+                _maintenanceNowMs.value = currentServerTimeMillis()
+            }
+        }
+
+        // Single shared real-time listener combining Firestore + RTDB for Maintenance Mode
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                FirebaseService.observeMaintenanceConfig(),
+                FirebaseRealtimeService.observeMaintenanceConfigFromRTDB()
+            ) { fsConfig, rtdbConfig ->
+                MaintenanceControlConfig.resolveAuthoritativeConfig(fsConfig, rtdbConfig)
+            }.collect { remoteConfig ->
+                if (remoteConfig != null) {
+                    _maintenanceConfig.value = remoteConfig
+                    persistMaintenanceConfig(remoteConfig)
+                    val now = currentServerTimeMillis()
+                    _maintenanceNowMs.value = now
+                    if (remoteConfig.isEffectivelyActive(now) && _currentScreen.value == Screen.EXAM) {
+                        _isTimerPaused.value = true
+                    }
+                    if (remoteConfig.isExpired(now)) {
+                        handleMaintenanceExpired(remoteConfig, now)
+                    }
+                }
+            }
+        }
+
+        // Drift-free 1-second maintenance ticker (runs ONLY while maintenanceEnabled == true)
+        viewModelScope.launch {
+            _maintenanceConfig.collectLatest { cfg ->
+                if (!cfg.maintenanceEnabled || cfg.maintenanceEndTime <= 0L) {
+                    _maintenanceNowMs.value = currentServerTimeMillis()
+                    return@collectLatest
+                }
+                while (true) {
+                    val now = currentServerTimeMillis()
+                    _maintenanceNowMs.value = now
+                    if (cfg.isEffectivelyActive(now) && _currentScreen.value == Screen.EXAM) {
+                        _isTimerPaused.value = true
+                    }
+                    if (cfg.isExpired(now)) {
+                        handleMaintenanceExpired(cfg, now)
+                        break
+                    }
+                    val rem = cfg.remainingMillis(now)
+                    val nextDelayMs = if (rem <= 0L) 1000L else ((rem - 1L) % 1000L + 1L).coerceIn(50L, 1000L)
+                    delay(nextDelayMs)
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                FirebaseService.observeSystemShutdownStatus(),
+                FirebaseRealtimeService.observeSystemShutdownFromRTDB()
+            ) { fsStatus, rtdbStatus ->
+                if (fsStatus == null && rtdbStatus == null) {
+                    null
+                } else {
+                    com.example.data.SystemControlConfig.resolveSystemShutdownStatus(fsStatus, rtdbStatus)
+                }
+            }.collect { shutdownState ->
+                if (shutdownState != null) {
+                    _isSystemShutdown.value = shutdownState
+                    prefs.edit().putBoolean("system_shutdown_active", shutdownState).apply()
+                    if (shutdownState && _currentScreen.value == Screen.EXAM) {
+                        _isTimerPaused.value = true
+                    }
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                FirebaseService.observeFirestoreSecurityKeySnapshot(),
+                FirebaseRealtimeService.observeSystemSecurityKeyFromRTDB()
+            ) { fsSnap, rtdbSnap ->
+                if (fsSnap == null && rtdbSnap == null) {
+                    null
+                } else {
+                    com.example.data.SystemControlConfig.resolveEffectiveSecurityKey(
+                        firestoreSnapshot = fsSnap,
+                        rtdbSecurityKey = rtdbSnap?.securityKey,
+                        rtdbPin = rtdbSnap?.pin,
+                        rtdbUpdatedAtMillis = rtdbSnap?.updatedAtMillis ?: 0L
+                    )
+                }
+            }.collect { resolvedKey ->
+                if (!resolvedKey.isNullOrBlank()) {
+                    _systemSecurityKey.value = resolvedKey
+                    prefs.edit().putString("cached_system_security_key", resolvedKey).apply()
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                FirebaseService.observeLeaderboardResetAt(),
+                FirebaseRealtimeService.observeLeaderboardResetAtFromRTDB()
+            ) { fsResetTs, rtdbResetTs ->
+                maxOf(fsResetTs, rtdbResetTs)
+            }.collect { remoteResetAt ->
+                if (remoteResetAt > 0L && remoteResetAt > activeLeaderboardResetAt) {
+                    activeLeaderboardResetAt = remoteResetAt
+                    prefs.edit().putLong("last_handled_leaderboard_reset_at", remoteResetAt).apply()
+                    zeroLocalStudentXp()
+                    updateLeaderboard()
+                }
+            }
+        }
+
         viewModelScope.launch {
             kotlinx.coroutines.flow.combine(
                 FirebaseService.observeAdminPricing(),
@@ -221,6 +464,17 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    private fun zeroLocalStudentXp() {
+        _userPoints.value = 0
+        _analyticsSummary.value = _analyticsSummary.value.copy(totalPoints = 0)
+        _liveXpData.value = _liveXpData.value.copy(xp = 0, level = 1)
+        val editor = sessionPrefs.edit()
+        sessionPrefs.all.keys
+            .filter { it == "user_xp" || it.startsWith("user_xp_") }
+            .forEach { editor.putInt(it, 0) }
+        editor.apply()
     }
 
     fun updateLiveChatPrice(newPrice: Int) {
@@ -1019,19 +1273,9 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
                         (me.formattedStudentId.isNotBlank() && student.formattedStudentId.equals(me.formattedStudentId, ignoreCase = true))
                     }
                     if (match != null) {
-                        if (match.isForceLoggedOut || match.isBlocked) {
-                            if (match.isForceLoggedOut) {
-                                FirebaseService.clearForceLogoutFlag(match.uid)
-                            }
-                            if (match.isBlocked) {
-                                _blockedAccountAlert.value = Pair(match.name.ifBlank { match.email }, match.blockReason.ifBlank { "Account blocked by Administrator." })
-                            }
-                            logout()
-                            navigateTo(Screen.AUTH)
-                        } else {
-                            val override = FirebaseService.getPremiumOverride(me.uid)
-                                ?: (if (me.email.isNotBlank()) FirebaseService.getPremiumOverride(me.email) else null)
-                                ?: (if (me.formattedStudentId.isNotBlank()) FirebaseService.getPremiumOverride(me.formattedStudentId) else null)
+                        val override = FirebaseService.getPremiumOverride(me.uid)
+                            ?: (if (me.email.isNotBlank()) FirebaseService.getPremiumOverride(me.email) else null)
+                            ?: (if (me.formattedStudentId.isNotBlank()) FirebaseService.getPremiumOverride(me.formattedStudentId) else null)
 
                             val targetPremium = when {
                                 override != null -> override
@@ -1052,7 +1296,6 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
                                     _userBadges.value = defaultLockedBadges
                                 }
                             }
-                        }
                     }
                 }
             }
@@ -1268,9 +1511,8 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val isMentor = cleanEmail == "ullassuvarna85@gmail.com" || registeredMentors.value.any { it.email.isNotBlank() && it.email.equals(cleanEmail, ignoreCase = true) }
 
-            // Clear any force logout flag on fresh login!
-            FirebaseService.clearForceLogoutFlag(calculatedUid)
-            FirebaseService.clearForceLogoutFlag(cleanEmail)
+            // Clear any force logout flag on fresh login across both UID and Email!
+            FirebaseService.clearForceLogoutFlag(calculatedUid, cleanEmail)
 
             // Verify if account or email is blocked by Admin (skip for mentors)
             if (!isMentor) {
@@ -1379,8 +1621,39 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         updateLeaderboard()
     }
 
+    fun loginAdminDirectFromShutdown() {
+        app.getSharedPreferences("user_session", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("is_logged_in", true)
+            .putBoolean("is_admin", true)
+            .putString("user_email", "ullassuvarna65@gmail.com")
+            .putString("user_uid", "admin_ullas")
+            .putString("user_name", "KCET Admin")
+            .apply()
+        loginAdmin()
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val currentEmail = FirebaseService.auth.currentUser?.email?.trim()?.lowercase()
+                if (currentEmail != "ullassuvarna65@gmail.com") {
+                    FirebaseService.auth.signInWithEmailAndPassword("ullassuvarna65@gmail.com", "Ullas@17082006")
+                        .awaitResult()
+                }
+            } catch (_: Exception) {
+                // Local admin portal session remains active even if offline
+            }
+        }
+    }
+
     fun logout() {
         clearSession()
+        app.getSharedPreferences("user_session", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .remove("is_logged_in")
+            .remove("is_admin")
+            .remove("user_email")
+            .remove("user_uid")
+            .remove("user_name")
+            .apply()
         FirebaseService.auth.signOut()
         _isLoggedIn.value = false
         resetNavigation(Screen.AUTH, BottomTab.HOME)
@@ -1966,6 +2239,7 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         val effectiveRemote = when {
             !remoteEntries.isNullOrEmpty() -> remoteEntries
             !lastRemoteLeaderboardEntries.isNullOrEmpty() -> lastRemoteLeaderboardEntries!!
+            activeLeaderboardResetAt > 0L -> com.example.data.defaultRegisteredStudents.map { it.copy(points = 0) }
             else -> com.example.data.defaultRegisteredStudents
         }
 
@@ -2117,6 +2391,9 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
     val activeTestSet: StateFlow<com.example.data.TestSeriesSet?> = _activeTestSet.asStateFlow()
 
     fun navigateTo(screen: Screen, replaceTop: Boolean = false) {
+        if (isMaintenanceActive.value && screen != Screen.ADMIN) {
+            return
+        }
         val currentTab = _selectedTab.value
         val newDest = NavDestination(screen, if (screen == Screen.MAIN) currentTab else BottomTab.HOME)
         val stack = _navigationStack.value.toMutableList()
@@ -2131,6 +2408,9 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
     }
 
     fun selectBottomTab(tab: BottomTab) {
+        if (isMaintenanceActive.value && _currentScreen.value != Screen.ADMIN) {
+            return
+        }
         _selectedTab.value = tab
         _currentScreen.value = Screen.MAIN
         val newDest = NavDestination(Screen.MAIN, tab)
@@ -2142,6 +2422,9 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
     }
 
     fun navigateBack(): Boolean {
+        if (isMaintenanceActive.value && _currentScreen.value != Screen.ADMIN) {
+            return false
+        }
         if (_currentScreen.value == Screen.ADMIN) {
             resetNavigation(Screen.MAIN, BottomTab.HOME)
             return true
@@ -3527,11 +3810,308 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    suspend fun verifySystemSecurityKey(enteredKey: String): Boolean {
+        val liveKey = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            FirebaseService.getEffectiveSystemSecurityKeyOnce(
+                fallbackCachedKey = prefs.getString("cached_system_security_key", _systemSecurityKey.value)
+            )
+        }
+        _systemSecurityKey.value = liveKey
+        prefs.edit().putString("cached_system_security_key", liveKey).apply()
+        return com.example.data.SystemControlConfig.verifySecurityKey(enteredKey, liveKey)
+    }
+
+    fun setSystemShutdown(enabled: Boolean, onResult: ((Boolean) -> Unit)? = null) {
+        _isSystemShutdown.value = enabled
+        prefs.edit().putBoolean("system_shutdown_active", enabled).apply()
+        viewModelScope.launch {
+            val success = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                FirebaseService.setSystemShutdownStatus(enabled)
+            }
+            onResult?.invoke(success)
+        }
+    }
+
+    // -------------------------------------------------------------
+    // APP-WIDE MAINTENANCE MODE (Admin Control + Auto-Expiry)
+    // -------------------------------------------------------------
+    private fun isCurrentUserAuthorizedAdmin(): Boolean {
+        val userSessionPrefs = app.getSharedPreferences("user_session", Context.MODE_PRIVATE)
+        return _currentScreen.value == Screen.ADMIN ||
+            sessionPrefs.getBoolean("is_admin", false) ||
+            userSessionPrefs.getBoolean("is_admin", false) ||
+            MaintenanceControlConfig.isAuthorizedAdminEmail(_userProfile.value.email) ||
+            MaintenanceControlConfig.isAuthorizedAdminEmail(FirebaseService.auth.currentUser?.email)
+    }
+
+    private fun resolveAuthorizedAdminEmail(): String {
+        val fbEmail = FirebaseService.auth.currentUser?.email?.trim()
+        if (MaintenanceControlConfig.isAuthorizedAdminEmail(fbEmail)) return fbEmail!!
+        if (MaintenanceControlConfig.isAuthorizedAdminEmail(_userProfile.value.email)) return _userProfile.value.email.trim()
+        return if (isCurrentUserAuthorizedAdmin()) MaintenanceControlConfig.AUTHORIZED_ADMIN_EMAIL else ""
+    }
+
+    fun refreshMaintenanceClock() {
+        val now = currentServerTimeMillis()
+        _maintenanceNowMs.value = now
+        val cfg = _maintenanceConfig.value
+        if (cfg.isExpired(now)) {
+            viewModelScope.launch {
+                handleMaintenanceExpired(cfg, now)
+            }
+        } else if (cfg.isEffectivelyActive(now) && _currentScreen.value == Screen.EXAM) {
+            _isTimerPaused.value = true
+        }
+    }
+
+    private suspend fun handleMaintenanceExpired(cfg: MaintenanceConfig, now: Long) {
+        if (!cfg.maintenanceEnabled || cfg.maintenanceEndTime <= 0L || now < cfg.maintenanceEndTime) return
+        if (!isCurrentUserAuthorizedAdmin()) {
+            // Non-admin clients treat expired timestamps as maintenance inactive locally without mutating backend
+            return
+        }
+        if (lastAutoDisabledEndTime == cfg.maintenanceEndTime) return
+        lastAutoDisabledEndTime = cfg.maintenanceEndTime
+
+        val expiredDisabled = cfg.copy(
+            maintenanceEnabled = false,
+            updatedAt = maxOf(now, cfg.updatedAt + 1L),
+            updatedBy = MaintenanceControlConfig.AUTHORIZED_ADMIN_EMAIL
+        )
+        _maintenanceConfig.value = expiredDisabled
+        persistMaintenanceConfig(expiredDisabled)
+        _maintenanceNowMs.value = now
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            FirebaseService.saveMaintenanceConfig(
+                config = expiredDisabled,
+                callerIsAuthorizedAdmin = true,
+                callerEmail = resolveAuthorizedAdminEmail()
+            )
+        }
+    }
+
+    fun clearMaintenanceFeedback() {
+        _maintenanceFeedback.value = null
+    }
+
+    fun activateMaintenance(hours: Int, minutes: Int, onResult: ((Boolean, String) -> Unit)? = null) {
+        if (!isCurrentUserAuthorizedAdmin()) {
+            val msg = "Unauthorized: Only an authorized Admin can activate Maintenance Mode."
+            _maintenanceFeedback.value = Pair(false, msg)
+            onResult?.invoke(false, msg)
+            return
+        }
+        val validation = MaintenanceControlConfig.validateDurationValues(hours, minutes)
+        if (!validation.isValid) {
+            val msg = validation.errorMessage ?: "Invalid maintenance duration."
+            _maintenanceFeedback.value = Pair(false, msg)
+            onResult?.invoke(false, msg)
+            return
+        }
+        if (_isUpdatingMaintenance.value) return
+        _isUpdatingMaintenance.value = true
+        _maintenanceFeedback.value = null
+
+        val now = currentServerTimeMillis()
+        val endTime = now + validation.totalDurationMillis
+        val newConfig = MaintenanceConfig(
+            maintenanceEnabled = true,
+            maintenanceStartTime = now,
+            maintenanceEndTime = endTime,
+            updatedAt = maxOf(now, _maintenanceConfig.value.updatedAt + 1L),
+            updatedBy = MaintenanceControlConfig.AUTHORIZED_ADMIN_EMAIL
+        )
+
+        viewModelScope.launch {
+            val res = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                FirebaseService.saveMaintenanceConfig(
+                    config = newConfig,
+                    callerIsAuthorizedAdmin = true,
+                    callerEmail = resolveAuthorizedAdminEmail()
+                )
+            }
+            _isUpdatingMaintenance.value = false
+            res.fold(
+                onSuccess = { saved ->
+                    lastAutoDisabledEndTime = 0L
+                    _maintenanceConfig.value = saved
+                    persistMaintenanceConfig(saved)
+                    _maintenanceNowMs.value = currentServerTimeMillis()
+                    val msg = "Maintenance Mode enabled for ${MaintenanceControlConfig.formatDurationSummary(validation.totalDurationMillis)}."
+                    _maintenanceFeedback.value = Pair(true, msg)
+                    onResult?.invoke(true, msg)
+                },
+                onFailure = { err ->
+                    val msg = err.message ?: "Failed to activate Maintenance Mode."
+                    _maintenanceFeedback.value = Pair(false, msg)
+                    onResult?.invoke(false, msg)
+                }
+            )
+        }
+    }
+
+    fun extendMaintenance(
+        additionalHours: Int,
+        additionalMinutes: Int,
+        replaceFromNow: Boolean = false,
+        onResult: ((Boolean, String) -> Unit)? = null
+    ) {
+        if (!isCurrentUserAuthorizedAdmin()) {
+            val msg = "Unauthorized: Only an authorized Admin can update Maintenance Mode."
+            _maintenanceFeedback.value = Pair(false, msg)
+            onResult?.invoke(false, msg)
+            return
+        }
+        val validation = MaintenanceControlConfig.validateDurationValues(additionalHours, additionalMinutes)
+        if (!validation.isValid) {
+            val msg = validation.errorMessage ?: "Invalid duration."
+            _maintenanceFeedback.value = Pair(false, msg)
+            onResult?.invoke(false, msg)
+            return
+        }
+        val currentCfg = _maintenanceConfig.value
+        val now = currentServerTimeMillis()
+        if (!currentCfg.isEffectivelyActive(now)) {
+            activateMaintenance(additionalHours, additionalMinutes, onResult)
+            return
+        }
+        if (_isUpdatingMaintenance.value) return
+        _isUpdatingMaintenance.value = true
+        _maintenanceFeedback.value = null
+
+        val newEndTime = if (replaceFromNow) {
+            now + validation.totalDurationMillis
+        } else {
+            maxOf(currentCfg.maintenanceEndTime, now) + validation.totalDurationMillis
+        }
+        val updatedConfig = currentCfg.copy(
+            maintenanceEnabled = true,
+            maintenanceStartTime = if (currentCfg.maintenanceStartTime > 0L) currentCfg.maintenanceStartTime else now,
+            maintenanceEndTime = newEndTime,
+            updatedAt = maxOf(now, currentCfg.updatedAt + 1L),
+            updatedBy = MaintenanceControlConfig.AUTHORIZED_ADMIN_EMAIL
+        )
+
+        viewModelScope.launch {
+            val res = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                FirebaseService.saveMaintenanceConfig(
+                    config = updatedConfig,
+                    callerIsAuthorizedAdmin = true,
+                    callerEmail = resolveAuthorizedAdminEmail()
+                )
+            }
+            _isUpdatingMaintenance.value = false
+            res.fold(
+                onSuccess = { saved ->
+                    lastAutoDisabledEndTime = 0L
+                    _maintenanceConfig.value = saved
+                    persistMaintenanceConfig(saved)
+                    _maintenanceNowMs.value = currentServerTimeMillis()
+                    val summary = MaintenanceControlConfig.formatDurationSummary(validation.totalDurationMillis)
+                    val msg = if (replaceFromNow) {
+                        "Maintenance timer updated to $summary from now."
+                    } else {
+                        "Maintenance extended by $summary."
+                    }
+                    _maintenanceFeedback.value = Pair(true, msg)
+                    onResult?.invoke(true, msg)
+                },
+                onFailure = { err ->
+                    val msg = err.message ?: "Failed to update maintenance timer."
+                    _maintenanceFeedback.value = Pair(false, msg)
+                    onResult?.invoke(false, msg)
+                }
+            )
+        }
+    }
+
+    fun disableMaintenance(onResult: ((Boolean, String) -> Unit)? = null) {
+        if (!isCurrentUserAuthorizedAdmin()) {
+            val msg = "Unauthorized: Only an authorized Admin can disable Maintenance Mode."
+            _maintenanceFeedback.value = Pair(false, msg)
+            onResult?.invoke(false, msg)
+            return
+        }
+        if (_isUpdatingMaintenance.value) return
+        _isUpdatingMaintenance.value = true
+        _maintenanceFeedback.value = null
+
+        val now = currentServerTimeMillis()
+        val currentCfg = _maintenanceConfig.value
+        val disabledConfig = currentCfg.copy(
+            maintenanceEnabled = false,
+            maintenanceEndTime = 0L,
+            updatedAt = maxOf(now, currentCfg.updatedAt + 1L),
+            updatedBy = MaintenanceControlConfig.AUTHORIZED_ADMIN_EMAIL
+        )
+
+        viewModelScope.launch {
+            val res = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                FirebaseService.saveMaintenanceConfig(
+                    config = disabledConfig,
+                    callerIsAuthorizedAdmin = true,
+                    callerEmail = resolveAuthorizedAdminEmail()
+                )
+            }
+            _isUpdatingMaintenance.value = false
+            res.fold(
+                onSuccess = { saved ->
+                    _maintenanceConfig.value = saved
+                    persistMaintenanceConfig(saved)
+                    _maintenanceNowMs.value = currentServerTimeMillis()
+                    val msg = "Maintenance Mode disabled. KCET Gen Z is now live for all users."
+                    _maintenanceFeedback.value = Pair(true, msg)
+                    onResult?.invoke(true, msg)
+                },
+                onFailure = { err ->
+                    val msg = err.message ?: "Failed to disable Maintenance Mode."
+                    _maintenanceFeedback.value = Pair(false, msg)
+                    onResult?.invoke(false, msg)
+                }
+            )
+        }
+    }
+
+    fun resetAllLeaderboardXp(onComplete: ((Boolean) -> Unit)? = null) {
+        if (_isResettingLeaderboard.value) return
+        _isResettingLeaderboard.value = true
+        viewModelScope.launch {
+            val success = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                FirebaseService.resetAllStudentLeaderboardXp()
+            }
+            if (success) {
+                val resetTs = System.currentTimeMillis()
+                activeLeaderboardResetAt = maxOf(activeLeaderboardResetAt, resetTs)
+                prefs.edit().putLong("last_handled_leaderboard_reset_at", activeLeaderboardResetAt).apply()
+                lastRemoteLeaderboardEntries = lastRemoteLeaderboardEntries?.map { it.copy(points = 0) }
+                zeroLocalStudentXp()
+                updateLeaderboard()
+            }
+            _isResettingLeaderboard.value = false
+            onComplete?.invoke(success)
+        }
+    }
+
     fun toggleBlockStudent(uid: String, isBlocked: Boolean, reason: String = "") {
         viewModelScope.launch {
             val currentProfile = allStudents.value.find { 
                 it.uid == uid || (it.email.isNotBlank() && it.email.equals(uid, ignoreCase = true))
             } ?: FirebaseService.getUserProfileOnce(uid)
+
+            val studentEmail = currentProfile?.email ?: (if (uid.contains("@")) uid else "")
+
+            if (isBlocked) {
+                FirebaseService.updateStudentBlockStatus(uid, true, reason)
+                if (studentEmail.isNotBlank()) {
+                    FirebaseService.updateStudentBlockStatus(studentEmail, true, reason)
+                }
+            } else {
+                FirebaseService.unblockStudent(uid, studentEmail)
+                FirebaseService.updateStudentBlockStatus(uid, false, "")
+                if (studentEmail.isNotBlank()) {
+                    FirebaseService.updateStudentBlockStatus(studentEmail, false, "")
+                }
+            }
 
             if (currentProfile != null) {
                 val updated = currentProfile.copy(
@@ -3540,12 +4120,12 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
                     isForceLoggedOut = isBlocked
                 )
                 FirebaseService.saveUserProfile(updated)
-            } else {
+            } else if (isBlocked) {
                 FirebaseService.forceLogoutStudent(uid)
             }
 
             val active = _userProfile.value
-            if (isBlocked && (active.uid == uid || (active.email.isNotBlank() && active.email.equals(uid, ignoreCase = true)))) {
+            if (isBlocked && (active.uid == uid || (active.email.isNotBlank() && active.email.equals(uid, ignoreCase = true)) || (studentEmail.isNotBlank() && active.email.equals(studentEmail, ignoreCase = true)))) {
                 logout()
                 _blockedAccountAlert.value = Pair(active.email.ifBlank { active.name }, reason.ifBlank { "Account blocked by Administrator." })
             }
@@ -3617,6 +4197,12 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
                         rejectionReason = "Premium access revoked by Administrator. Please pay and submit receipt to unlock again."
                     )
                 }
+            }
+
+            // Force logout student so they must re-login to see updated state (as requested)
+            FirebaseService.forceLogoutStudent(uid)
+            if (profileToSave.email.isNotBlank()) {
+                FirebaseService.forceLogoutStudent(profileToSave.email)
             }
 
             // Always update sessionPrefs per-user keys so local device remembers across refreshes
@@ -3847,5 +4433,373 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
             com.example.data.ChallengeService.deleteQuestionSet(setId)
         }
     }
+
+    // -------------------------------------------------------------
+    // EMAIL DELIVERY SETTINGS (SHARED EMAILJS ADMIN API)
+    // -------------------------------------------------------------
+    private val _emailDeliveryState = MutableStateFlow(EmailDeliveryUiState())
+    val emailDeliveryState: StateFlow<EmailDeliveryUiState> = _emailDeliveryState.asStateFlow()
+
+    fun refreshFirebaseAuthStatus() {
+        val status = EmailSettingsService.getFirebaseAdminSessionStatus()
+        _emailDeliveryState.value = _emailDeliveryState.value.copy(
+            isFirebaseSignedIn = status.isSignedIn,
+            firebaseAuthEmail = status.email,
+            isFirebaseEmailVerified = status.isEmailVerified
+        )
+    }
+
+    fun clearEmailDeliveryFeedback() {
+        _emailDeliveryState.value = _emailDeliveryState.value.copy(
+            errorMessage = null,
+            successMessage = null
+        )
+    }
+
+    fun fetchEmailDeliverySettings() {
+        if (_emailDeliveryState.value.isLoading || _emailDeliveryState.value.isUpdating) return
+        refreshFirebaseAuthStatus()
+        _emailDeliveryState.value = _emailDeliveryState.value.copy(
+            isLoading = true,
+            errorMessage = null
+        )
+
+        viewModelScope.launch {
+            val result = EmailSettingsService.instance.fetchEmailSettings()
+            refreshFirebaseAuthStatus()
+            when (result) {
+                is EmailSettingsApiResult.Success -> {
+                    _emailDeliveryState.value = _emailDeliveryState.value.copy(
+                        isLoading = false,
+                        settings = result.data,
+                        errorMessage = null
+                    )
+                }
+                is EmailSettingsApiResult.Error -> {
+                    _emailDeliveryState.value = _emailDeliveryState.value.copy(
+                        isLoading = false,
+                        errorMessage = result.message,
+                        successMessage = null
+                    )
+                }
+            }
+        }
+    }
+
+    fun setEmailJsEnabled(enabled: Boolean) {
+        if (_emailDeliveryState.value.isLoading || _emailDeliveryState.value.isUpdating) return
+        refreshFirebaseAuthStatus()
+        _emailDeliveryState.value = _emailDeliveryState.value.copy(
+            isUpdating = true,
+            errorMessage = null,
+            successMessage = null
+        )
+
+        viewModelScope.launch {
+            val postResult = EmailSettingsService.instance.updateEmailSettings(enabled)
+            refreshFirebaseAuthStatus()
+            when (postResult) {
+                is EmailSettingsApiResult.Error -> {
+                    _emailDeliveryState.value = _emailDeliveryState.value.copy(
+                        isUpdating = false,
+                        errorMessage = postResult.message,
+                        successMessage = null
+                    )
+                }
+                is EmailSettingsApiResult.Success -> {
+                    // Refresh authoritative configuration via GET after confirmed POST
+                    val refreshResult = EmailSettingsService.instance.fetchEmailSettings()
+                    refreshFirebaseAuthStatus()
+                    when (refreshResult) {
+                        is EmailSettingsApiResult.Success -> {
+                            val refreshed = refreshResult.data
+                            val statusLabel = if (refreshed.customEmailEnabled) "ENABLED" else "DISABLED"
+                            _emailDeliveryState.value = _emailDeliveryState.value.copy(
+                                isUpdating = false,
+                                settings = refreshed,
+                                errorMessage = null,
+                                successMessage = "EmailJS is now $statusLabel (Active Provider: ${refreshed.activeProvider})."
+                            )
+                        }
+                        is EmailSettingsApiResult.Error -> {
+                            // Do not discard confirmed POST state, but report refresh failure transparently
+                            val confirmed = postResult.data
+                            val statusLabel = if (confirmed.customEmailEnabled) "ENABLED" else "DISABLED"
+                            _emailDeliveryState.value = _emailDeliveryState.value.copy(
+                                isUpdating = false,
+                                settings = confirmed,
+                                successMessage = "EmailJS updated to $statusLabel.",
+                                errorMessage = "Status updated, but refresh failed: ${refreshResult.message}"
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun setCustomVerificationEmailEnabled(enabled: Boolean) {
+        if (_emailDeliveryState.value.isLoading || _emailDeliveryState.value.isUpdating) return
+        refreshFirebaseAuthStatus()
+        _emailDeliveryState.value = _emailDeliveryState.value.copy(
+            isUpdating = true,
+            errorMessage = null,
+            successMessage = null
+        )
+
+        viewModelScope.launch {
+            val postResult = EmailSettingsService.instance.updateCustomVerificationEmailSetting(enabled)
+            refreshFirebaseAuthStatus()
+            when (postResult) {
+                is EmailSettingsApiResult.Error -> {
+                    _emailDeliveryState.value = _emailDeliveryState.value.copy(
+                        isUpdating = false,
+                        errorMessage = postResult.message,
+                        successMessage = null
+                    )
+                }
+                is EmailSettingsApiResult.Success -> {
+                    val refreshResult = EmailSettingsService.instance.fetchEmailSettings()
+                    refreshFirebaseAuthStatus()
+                    when (refreshResult) {
+                        is EmailSettingsApiResult.Success -> {
+                            val refreshed = refreshResult.data
+                            val statusLabel = if (refreshed.customVerificationEmailEnabled) "ENABLED" else "DISABLED"
+                            _emailDeliveryState.value = _emailDeliveryState.value.copy(
+                                isUpdating = false,
+                                settings = refreshed,
+                                errorMessage = null,
+                                successMessage = "Custom Email Verification is now $statusLabel."
+                            )
+                        }
+                        is EmailSettingsApiResult.Error -> {
+                            val confirmed = postResult.data
+                            val statusLabel = if (confirmed.customVerificationEmailEnabled) "ENABLED" else "DISABLED"
+                            _emailDeliveryState.value = _emailDeliveryState.value.copy(
+                                isUpdating = false,
+                                settings = confirmed,
+                                successMessage = "Custom Email Verification updated to $statusLabel.",
+                                errorMessage = "Status updated, but refresh failed: ${refreshResult.message}"
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------
+    // ADMIN-TO-STUDENT EMAIL NOTIFICATIONS
+    // -------------------------------------------------------------
+    private val _adminEmailState = MutableStateFlow(AdminEmailNotificationUiState())
+    val adminEmailState: StateFlow<AdminEmailNotificationUiState> = _adminEmailState.asStateFlow()
+
+    private fun refreshAdminEmailAuthStatus() {
+        val status = AdminEmailService.getFirebaseAdminSessionStatus()
+        _adminEmailState.value = _adminEmailState.value.copy(
+            isFirebaseSignedIn = status.isSignedIn,
+            firebaseAuthEmail = status.email,
+            isFirebaseEmailVerified = status.isEmailVerified
+        )
+    }
+
+    fun loadAdminStudentsForEmail(forceRefresh: Boolean = false) {
+        val current = _adminEmailState.value
+        if (current.isLoadingStudents) return
+        if (!forceRefresh && current.isStudentsLoaded && current.students.isNotEmpty()) {
+            refreshAdminEmailAuthStatus()
+            return
+        }
+
+        refreshAdminEmailAuthStatus()
+        _adminEmailState.value = _adminEmailState.value.copy(
+            isLoadingStudents = true,
+            studentsError = null
+        )
+
+        viewModelScope.launch {
+            val result = AdminEmailService.instance.fetchAllStudents()
+            refreshAdminEmailAuthStatus()
+            when (result) {
+                is AdminEmailApiResult.Success -> {
+                    val fetched = result.data
+                    val existingSelectedUid = _adminEmailState.value.selectedStudent?.uid
+                    val updatedSelected = if (existingSelectedUid != null) {
+                        fetched.find { it.uid == existingSelectedUid } ?: _adminEmailState.value.selectedStudent
+                    } else {
+                        null
+                    }
+                    _adminEmailState.value = _adminEmailState.value.copy(
+                        students = fetched,
+                        selectedStudent = updatedSelected,
+                        isLoadingStudents = false,
+                        isStudentsLoaded = true,
+                        studentsError = null
+                    )
+                }
+                is AdminEmailApiResult.Error -> {
+                    _adminEmailState.value = _adminEmailState.value.copy(
+                        isLoadingStudents = false,
+                        studentsError = result.message
+                    )
+                }
+            }
+        }
+    }
+
+    fun updateAdminEmailStudentSearch(query: String) {
+        _adminEmailState.value = _adminEmailState.value.copy(searchQuery = query)
+    }
+
+    fun selectStudentForAdminEmail(student: AdminRegisteredStudent?) {
+        _adminEmailState.value = _adminEmailState.value.copy(
+            selectedStudent = student,
+            sendErrorMessage = null,
+            sendSuccessMessage = null,
+            isSendTimeoutUncertain = false
+        )
+    }
+
+    fun updateAdminEmailSubject(subject: String) {
+        _adminEmailState.value = _adminEmailState.value.copy(
+            subject = subject,
+            sendErrorMessage = null
+        )
+    }
+
+    fun updateAdminEmailMessage(message: String) {
+        _adminEmailState.value = _adminEmailState.value.copy(
+            message = message,
+            sendErrorMessage = null
+        )
+    }
+
+    fun clearAdminEmailSendFeedback() {
+        _adminEmailState.value = _adminEmailState.value.copy(
+            sendSuccessMessage = null,
+            sendErrorMessage = null,
+            isSendTimeoutUncertain = false
+        )
+    }
+
+    fun sendAdminStudentEmail() {
+        val current = _adminEmailState.value
+        if (current.isSending) return
+
+        val selected = current.selectedStudent
+        if (selected == null || selected.uid.isBlank()) {
+            _adminEmailState.value = current.copy(
+                sendErrorMessage = "Please select a registered student before sending.",
+                sendSuccessMessage = null,
+                isSendTimeoutUncertain = false
+            )
+            return
+        }
+
+        val cleanSubject = current.subject.trim()
+        val cleanMessage = current.message.trim()
+        if (cleanSubject.isBlank()) {
+            _adminEmailState.value = current.copy(
+                sendErrorMessage = "Please enter an email subject.",
+                sendSuccessMessage = null,
+                isSendTimeoutUncertain = false
+            )
+            return
+        }
+        if (cleanMessage.isBlank()) {
+            _adminEmailState.value = current.copy(
+                sendErrorMessage = "Please enter an email message.",
+                sendSuccessMessage = null,
+                isSendTimeoutUncertain = false
+            )
+            return
+        }
+
+        refreshAdminEmailAuthStatus()
+        _adminEmailState.value = _adminEmailState.value.copy(
+            isSending = true,
+            sendSuccessMessage = null,
+            sendErrorMessage = null,
+            isSendTimeoutUncertain = false
+        )
+
+        viewModelScope.launch {
+            val result = AdminEmailService.instance.sendStudentEmail(
+                studentUid = selected.uid,
+                subject = cleanSubject,
+                message = cleanMessage
+            )
+            refreshAdminEmailAuthStatus()
+            when (result) {
+                is AdminEmailApiResult.Success -> {
+                    val deliveredEmail = result.data.recipientEmail.ifBlank { selected.email }
+                    val confirmMsg = if (deliveredEmail.isNotBlank()) {
+                        "Email submitted to $deliveredEmail (${selected.name})."
+                    } else {
+                        result.data.message
+                    }
+                    _adminEmailState.value = _adminEmailState.value.copy(
+                        isSending = false,
+                        sendSuccessMessage = confirmMsg,
+                        sendErrorMessage = null,
+                        isSendTimeoutUncertain = false,
+                        subject = "",
+                        message = ""
+                    )
+                    // Auto-refresh email history after confirmed submission
+                    loadAdminEmailLogs(forceRefresh = true)
+                }
+                is AdminEmailApiResult.Error -> {
+                    _adminEmailState.value = _adminEmailState.value.copy(
+                        isSending = false,
+                        sendSuccessMessage = null,
+                        sendErrorMessage = result.message,
+                        isSendTimeoutUncertain = result.isTimeoutUncertain
+                    )
+                    if (result.isTimeoutUncertain) {
+                        loadAdminEmailLogs(forceRefresh = true)
+                    }
+                }
+            }
+        }
+    }
+
+    fun loadAdminEmailLogs(forceRefresh: Boolean = false) {
+        val current = _adminEmailState.value
+        if (current.isLoadingLogs) return
+        if (!forceRefresh && current.isLogsLoaded && current.emailLogs.isNotEmpty()) {
+            refreshAdminEmailAuthStatus()
+            return
+        }
+
+        refreshAdminEmailAuthStatus()
+        _adminEmailState.value = _adminEmailState.value.copy(
+            isLoadingLogs = true,
+            logsError = null
+        )
+
+        viewModelScope.launch {
+            val result = AdminEmailService.instance.fetchEmailLogs()
+            refreshAdminEmailAuthStatus()
+            when (result) {
+                is AdminEmailApiResult.Success -> {
+                    _adminEmailState.value = _adminEmailState.value.copy(
+                        emailLogs = result.data,
+                        isLoadingLogs = false,
+                        isLogsLoaded = true,
+                        logsError = null
+                    )
+                }
+                is AdminEmailApiResult.Error -> {
+                    _adminEmailState.value = _adminEmailState.value.copy(
+                        isLoadingLogs = false,
+                        logsError = result.message
+                    )
+                }
+            }
+        }
+    }
 }
+
+
 

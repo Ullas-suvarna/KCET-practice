@@ -32,6 +32,9 @@ import kotlinx.coroutines.delay
 import com.example.ui.components.WhiteLoadingScreen
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.runtime.DisposableEffect
@@ -51,6 +54,7 @@ import com.example.ui.screens.BranchExplorerScreen
 import com.example.ui.screens.CounsellingScreen
 import com.example.ui.screens.ExamScreen
 import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.MaintenanceScreen
 import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.PracticeScreen
 import com.example.ui.screens.SyllabusVideosScreen
@@ -60,6 +64,7 @@ import com.example.ui.screens.ResultScreen
 import com.example.ui.screens.SavedBookmarksScreen
 import com.example.ui.screens.SeniorLiveChatScreen
 import com.example.ui.screens.SplashScreen
+import com.example.ui.screens.SystemShutdownScreen
 import com.example.ui.screens.DeveloperIntroScreen
 import com.example.ui.theme.KcetPracticeTheme
 import com.example.viewmodel.BottomTab
@@ -132,6 +137,29 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
     val blockedAlert by viewModel.blockedAccountAlert.collectAsStateWithLifecycle()
     val canNavigateBack by viewModel.canNavigateBack.collectAsStateWithLifecycle()
     val isSubmittingExam by viewModel.isSubmittingExam.collectAsStateWithLifecycle()
+    val isSystemShutdown by viewModel.isSystemShutdown.collectAsStateWithLifecycle()
+    val isResettingLeaderboard by viewModel.isResettingLeaderboard.collectAsStateWithLifecycle()
+    val maintenanceConfig by viewModel.maintenanceConfig.collectAsStateWithLifecycle()
+    val isMaintenanceActive by viewModel.isMaintenanceActive.collectAsStateWithLifecycle()
+    val serverTimeOffsetMs by viewModel.serverTimeOffsetMs.collectAsStateWithLifecycle()
+    val isUpdatingMaintenance by viewModel.isUpdatingMaintenance.collectAsStateWithLifecycle()
+    val maintenanceFeedback by viewModel.maintenanceFeedback.collectAsStateWithLifecycle()
+
+    // Recalculate maintenance clock & auto-expiry whenever app returns from background
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshMaintenanceClock()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Root-level Maintenance Mode gate: blocks all normal screens (including splash, onboarding, auth, student, mentor) while keeping Admin Portal accessible
+    val shouldShowMaintenanceOverlay = isMaintenanceActive && currentScreen != Screen.ADMIN
+    val shouldShowShutdownOverlay = isSystemShutdown && currentScreen != Screen.ADMIN && currentScreen != Screen.SPLASH
 
     var selectedChallengeOpponent by remember { androidx.compose.runtime.mutableStateOf<com.example.data.LeaderboardEntry?>(null) }
 
@@ -141,11 +169,11 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
 
     val isAtRootHome = (currentScreen == Screen.MAIN && selectedTab == BottomTab.HOME)
     val isSystemBackExcluded = currentScreen == Screen.AUTH || currentScreen == Screen.SPLASH || currentScreen == Screen.EXAM || currentScreen == Screen.DEV_INTRO || currentScreen == Screen.ADMIN || currentScreen == Screen.SENIOR_CHAT
-    val shouldHandleSystemBack = !isAtRootHome && !isSystemBackExcluded
+    val shouldHandleSystemBack = !shouldShowMaintenanceOverlay && !shouldShowShutdownOverlay && !isAtRootHome && !isSystemBackExcluded
 
     // System Back Handler:
     // 1. If Navigation Drawer is open, Back closes the drawer first
-    BackHandler(enabled = drawerState.isOpen) {
+    BackHandler(enabled = drawerState.isOpen && !shouldShowMaintenanceOverlay && !shouldShowShutdownOverlay) {
         scope.launch { drawerState.close() }
     }
 
@@ -208,6 +236,18 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
                     .fillMaxSize()
                     .background(if (isDarkMode) MaterialTheme.colorScheme.background else Color.White)
             ) {
+                if (shouldShowMaintenanceOverlay) {
+                    MaintenanceScreen(
+                        config = maintenanceConfig,
+                        remainingMillisFlow = viewModel.maintenanceRemainingMillis,
+                        serverTimeOffsetMs = serverTimeOffsetMs
+                    )
+                } else if (shouldShowShutdownOverlay) {
+                    SystemShutdownScreen(
+                        onVerifySecurityKey = { key -> viewModel.verifySystemSecurityKey(key) },
+                        onAdminDirectLogin = { viewModel.loginAdminDirectFromShutdown() }
+                    )
+                } else {
                     when (currentScreen) {
                 Screen.SPLASH -> {
                     SplashScreen(
@@ -492,6 +532,8 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
                     val adminPin by viewModel.adminPin.collectAsStateWithLifecycle()
                     val adminChallenges by viewModel.adminChallenges.collectAsStateWithLifecycle()
                     val challengeQuestionSets by viewModel.challengeQuestionSets.collectAsStateWithLifecycle()
+                    val emailDeliveryState by viewModel.emailDeliveryState.collectAsStateWithLifecycle()
+                    val adminEmailState by viewModel.adminEmailState.collectAsStateWithLifecycle()
 
                     Box(modifier = Modifier.fillMaxSize()) {
                         AdminPanelScreen(
@@ -516,7 +558,17 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
                                 adminChallenges = adminChallenges,
                                 challengeQuestionSets = challengeQuestionSets,
                                 liveChatPrice = liveChatPrice,
-                                subscriptionPrice = subscriptionPrice
+                                subscriptionPrice = subscriptionPrice,
+                                emailDeliveryState = emailDeliveryState,
+                                adminEmailState = adminEmailState,
+                                isSystemShutdown = isSystemShutdown,
+                                isResettingLeaderboard = isResettingLeaderboard,
+                                maintenanceConfig = maintenanceConfig,
+                                isMaintenanceActive = isMaintenanceActive,
+                                maintenanceRemainingMillisFlow = viewModel.maintenanceRemainingMillis,
+                                serverTimeOffsetMs = serverTimeOffsetMs,
+                                isUpdatingMaintenance = isUpdatingMaintenance,
+                                maintenanceFeedback = maintenanceFeedback
                             ),
                             actions = AdminPanelActions(
                                 onAddQuestion = { sub, qText, a, b, c, d, opt, exp ->
@@ -641,6 +693,25 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
                                 },
                                 onUpdateLiveChatPrice = { viewModel.updateLiveChatPrice(it) },
                                 onUpdateSubscriptionPrice = { viewModel.updateSubscriptionPrice(it) },
+                                onFetchEmailDeliverySettings = { viewModel.fetchEmailDeliverySettings() },
+                                onToggleEmailJs = { enabled -> viewModel.setEmailJsEnabled(enabled) },
+                                onToggleCustomVerificationEmail = { enabled -> viewModel.setCustomVerificationEmailEnabled(enabled) },
+                                onClearEmailDeliveryFeedback = { viewModel.clearEmailDeliveryFeedback() },
+                                onLoadAdminEmailStudents = { force -> viewModel.loadAdminStudentsForEmail(force) },
+                                onUpdateAdminEmailStudentSearch = { query -> viewModel.updateAdminEmailStudentSearch(query) },
+                                onSelectStudentForAdminEmail = { student -> viewModel.selectStudentForAdminEmail(student) },
+                                onUpdateAdminEmailSubject = { subject -> viewModel.updateAdminEmailSubject(subject) },
+                                onUpdateAdminEmailMessage = { message -> viewModel.updateAdminEmailMessage(message) },
+                                onSendAdminStudentEmail = { viewModel.sendAdminStudentEmail() },
+                                onLoadAdminEmailLogs = { force -> viewModel.loadAdminEmailLogs(force) },
+                                onClearAdminEmailSendFeedback = { viewModel.clearAdminEmailSendFeedback() },
+                                onResetLeaderboard = { viewModel.resetAllLeaderboardXp() },
+                                onVerifySystemSecurityKey = { key -> viewModel.verifySystemSecurityKey(key) },
+                                onToggleSystemShutdown = { enabled -> viewModel.setSystemShutdown(enabled) },
+                                onActivateMaintenance = { hrs, mins -> viewModel.activateMaintenance(hrs, mins) },
+                                onExtendMaintenance = { hrs, mins, replace -> viewModel.extendMaintenance(hrs, mins, replace) },
+                                onDisableMaintenance = { viewModel.disableMaintenance() },
+                                onClearMaintenanceFeedback = { viewModel.clearMaintenanceFeedback() },
                                 onBack = {
                                     viewModel.logout()
                                 }
@@ -774,6 +845,7 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
 
             }
 
+            if (!shouldShowMaintenanceOverlay && !shouldShowShutdownOverlay) {
             selectedChallengeOpponent?.let { opponent ->
                 val context = LocalContext.current
                 com.example.ui.components.ChallengeSetupDialog(
@@ -820,6 +892,8 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
                     }
                 )
             }
+            }
+                }
         }
     }
 }

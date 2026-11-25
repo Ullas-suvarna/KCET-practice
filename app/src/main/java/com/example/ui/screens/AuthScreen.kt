@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -62,8 +63,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -92,17 +95,24 @@ import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import com.example.R
+import com.example.data.EmailValidationResult
 import com.example.data.FirebaseService
 import com.example.data.FirebaseService.awaitResult
+import com.example.data.PasswordResetBackendResult
+import com.example.data.PasswordResetService
 import com.example.data.UserProfile
 import com.example.ui.components.AboutAppDialog
 import com.example.ui.components.ContactSupportDialog
 import com.example.ui.components.DisclaimerDialog
 import com.example.ui.components.PrivacyPolicyDialog
 import com.example.ui.components.TermsAndConditionsDialog
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.auth.GoogleAuthProvider
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 data class BlockedDialogInfo(
@@ -216,6 +226,45 @@ fun AuthScreen(
     var isCheckingVerificationStatus by remember { mutableStateOf(false) }
     var isResendingVerification by remember { mutableStateOf(false) }
     var verificationStatusCheckMessage by remember { mutableStateOf<String?>(null) }
+    var isPendingEmailVerified by remember { mutableStateOf(false) }
+    var resendCooldownSeconds by remember { mutableIntStateOf(0) }
+    var isVerificationDeliveryUncertain by remember { mutableStateOf(false) }
+
+    LaunchedEffect(resendCooldownSeconds) {
+        if (resendCooldownSeconds > 0) {
+            delay(1000L)
+            resendCooldownSeconds -= 1
+        }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, showEmailVerificationSentDialog, pendingVerificationEmail) {
+        if (!showEmailVerificationSentDialog || pendingVerificationEmail.isBlank()) {
+            onDispose { }
+        } else {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME && !isCheckingVerificationStatus && !isPendingEmailVerified) {
+                    coroutineScope.launch {
+                        isCheckingVerificationStatus = true
+                        val refreshRes = FirebaseService.refreshEmailVerificationStatus(
+                            email = pendingVerificationEmail,
+                            password = pendingVerificationPassword.ifBlank { null }
+                        )
+                        isCheckingVerificationStatus = false
+                        if (refreshRes.getOrNull() == true) {
+                            isPendingEmailVerified = true
+                            isVerificationDeliveryUncertain = false
+                            verificationStatusCheckMessage = "✅ Your email ($pendingVerificationEmail) has been verified! Tap 'Continue to App' below to proceed."
+                        }
+                    }
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            onDispose {
+                lifecycleOwner.lifecycle.removeObserver(observer)
+            }
+        }
+    }
 
     var showTermsDialog by remember { mutableStateOf(false) }
     var showPrivacyDialog by remember { mutableStateOf(false) }
@@ -666,11 +715,24 @@ fun AuthScreen(
                                         Toast.makeText(context, "Signed in successfully.", Toast.LENGTH_SHORT).show()
                                         onAdminLoginSuccess()
 
-                                        // Optional background sync
-                                        try {
-                                            FirebaseService.auth.signInWithEmailAndPassword("ullassuvarna65@gmail.com", typedPassword).awaitResult()
-                                            FirebaseService.updateUserEmailVerified("admin_ullas", "ullassuvarna65@gmail.com")
-                                        } catch (_: Exception) {}
+                                        // Background Firebase Auth sync on non-UI scope only when needed and when input looks like a real Firebase password (not a shortcut PIN)
+                                        val alreadySignedInAsAdmin = FirebaseService.auth.currentUser?.email?.equals("ullassuvarna65@gmail.com", ignoreCase = true) == true
+                                        val isLocalShortcutPin = typedPassword == "17082006" ||
+                                                typedPassword == FirebaseService.DEFAULT_ADMIN_PIN ||
+                                                typedPassword == adminPin ||
+                                                typedPassword.lowercase() == "admin123" ||
+                                                typedPassword.lowercase() == "admin" ||
+                                                typedPassword.lowercase() == "ullas"
+                                        if (!alreadySignedInAsAdmin && !isLocalShortcutPin && typedPassword.length >= 6) {
+                                            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                                                try {
+                                                    val bgSignIn = FirebaseService.auth.signInWithEmailAndPassword("ullassuvarna65@gmail.com", typedPassword).awaitResult()
+                                                    if (bgSignIn.isSuccess) {
+                                                        FirebaseService.updateUserEmailVerified("admin_ullas", "ullassuvarna65@gmail.com")
+                                                    }
+                                                } catch (_: Exception) {}
+                                            }
+                                        }
                                         return@launch
                                     }
 
@@ -774,85 +836,179 @@ fun AuthScreen(
                                     }
 
                                     // Create user in Firebase Auth
+                                    var registeredFirebaseUser: com.google.firebase.auth.FirebaseUser? = null
                                     var authCreatedUid: String? = null
                                     val createRes = FirebaseService.auth.createUserWithEmailAndPassword(derivedAuthEmail, passwordInput.trim()).awaitResult()
                                     if (createRes.isSuccess) {
-                                        authCreatedUid = createRes.getOrNull()?.user?.uid
+                                        registeredFirebaseUser = createRes.getOrNull()?.user ?: FirebaseService.auth.currentUser
+                                        authCreatedUid = registeredFirebaseUser?.uid
                                     } else {
-                                        // If already created in Firebase Auth, attempt sign-in to confirm credentials
-                                        val testAuthRes = FirebaseService.auth.signInWithEmailAndPassword(derivedAuthEmail, passwordInput.trim()).awaitResult()
-                                        if (testAuthRes.isSuccess) {
-                                            authCreatedUid = testAuthRes.getOrNull()?.user?.uid
+                                        val createExc = createRes.exceptionOrNull()
+                                        val createErrMsg = (createExc?.message ?: "").lowercase()
+                                        val isAlreadyInUse = createExc is com.google.firebase.auth.FirebaseAuthUserCollisionException ||
+                                                createErrMsg.contains("already in use") ||
+                                                createErrMsg.contains("email-already-in-use")
+                                        if (isAlreadyInUse) {
+                                            // If already created in Firebase Auth, attempt sign-in only if password matches
+                                            val testAuthRes = FirebaseService.auth.signInWithEmailAndPassword(derivedAuthEmail, passwordInput.trim()).awaitResult()
+                                            if (testAuthRes.isSuccess) {
+                                                registeredFirebaseUser = testAuthRes.getOrNull()?.user ?: FirebaseService.auth.currentUser
+                                                authCreatedUid = registeredFirebaseUser?.uid
+                                            } else {
+                                                isLoading = false
+                                                isRegistering = false
+                                                authErrorMessage = "An account with '$derivedAuthEmail' already exists. Please Sign In (or use Forgot Password / Continue with Google)."
+                                                Toast.makeText(context, "Account already exists. Please sign in.", Toast.LENGTH_LONG).show()
+                                                return@launch
+                                            }
+                                        } else {
+                                            isLoading = false
+                                            val errDetail = createExc?.localizedMessage ?: "Unable to create account with Firebase Authentication."
+                                            authErrorMessage = "Registration Failed: $errDetail"
+                                            Toast.makeText(context, authErrorMessage, Toast.LENGTH_LONG).show()
+                                            return@launch
                                         }
                                     }
 
-                                    val finalUid = authCreatedUid ?: "std_${System.currentTimeMillis()}"
+                                    val finalUid = authCreatedUid ?: registeredFirebaseUser?.uid
+                                    if (finalUid.isNullOrBlank()) {
+                                        isLoading = false
+                                        authErrorMessage = "Registration Failed: Unable to obtain authenticated Firebase user."
+                                        Toast.makeText(context, authErrorMessage, Toast.LENGTH_LONG).show()
+                                        return@launch
+                                    }
                                     val isEmailAuth = emailClean.contains("@")
 
-                                    // Clear deleted flag and save record in Firestore
-                                    FirebaseService.clearDeletedStudent(emailClean, finalUid)
-                                    FirebaseService.saveUserRecord(
-                                        uid = finalUid,
-                                        email = emailClean,
-                                        phone = phoneClean,
-                                        password = passwordInput.trim(),
-                                        name = nameInput.trim(),
-                                        signInMethod = if (isEmailAuth) "Email & Password" else "Phone Number",
-                                        emailVerified = !isEmailAuth
-                                    )
-
-                                    val userProfile = UserProfile(
-                                        uid = finalUid,
-                                        name = nameInput.trim().ifBlank { "KCET Student" },
-                                        email = emailClean,
-                                        isPremium = false,
-                                        kcetTargetRank = "Under 1000",
-                                        targetStream = "Engineering (B.E / B.Tech)",
-                                        registrationDate = "2026",
-                                        signInMethod = if (isEmailAuth) "Email & Password" else "Phone Number"
-                                    )
-                                    FirebaseService.saveUserProfile(userProfile)
-
                                     if (isEmailAuth) {
-                                        // Send verification email
-                                        val currentUser = FirebaseService.auth.currentUser
-                                        if (currentUser != null) {
-                                            try {
-                                                FirebaseService.sendUserVerificationEmail(currentUser)
-                                            } catch (_: Exception) {}
-                                        } else {
-                                            try {
-                                                FirebaseService.sendVerificationEmailToAddress(emailClean, passwordInput.trim())
-                                            } catch (_: Exception) {}
-                                        }
+                                        // Do NOT call signOut() before obtaining Firebase ID token and calling verification backend
+                                        val dispatchOutcome = FirebaseService.sendVerificationEmailViaBackend(
+                                            email = emailClean,
+                                            password = passwordInput.trim(),
+                                            userOverride = registeredFirebaseUser ?: FirebaseService.auth.currentUser
+                                        )
 
-                                        // Crucial: Sign out immediately so user is NOT logged in directly
-                                        try {
-                                            FirebaseService.auth.signOut()
-                                        } catch (_: Exception) {}
+                                        // Clear deleted flag and save student profile/record to Firestore
+                                        FirebaseService.clearDeletedStudent(emailClean, finalUid)
+                                        FirebaseService.saveUserRecord(
+                                            uid = finalUid,
+                                            email = emailClean,
+                                            phone = phoneClean,
+                                            password = passwordInput.trim(),
+                                            name = nameInput.trim(),
+                                            signInMethod = "Email & Password",
+                                            emailVerified = dispatchOutcome is FirebaseService.VerificationDispatchOutcome.AlreadyVerified
+                                        )
+                                        val userProfile = UserProfile(
+                                            uid = finalUid,
+                                            name = nameInput.trim().ifBlank { "KCET Student" },
+                                            email = emailClean,
+                                            isPremium = false,
+                                            kcetTargetRank = "Under 1000",
+                                            targetStream = "Engineering (B.E / B.Tech)",
+                                            registrationDate = "2026",
+                                            signInMethod = "Email & Password"
+                                        )
+                                        FirebaseService.saveUserProfile(userProfile)
 
                                         isLoading = false
                                         isRegistering = false
                                         authErrorMessage = null
-                                        authSuccessMessage = "Registration successful! A verification link has been sent to $emailClean. Please verify your email before logging in."
 
                                         pendingVerificationEmail = emailClean
                                         pendingVerificationPassword = passwordInput.trim()
                                         pendingVerificationName = nameInput.trim()
                                         pendingVerificationPhone = phoneClean
                                         pendingVerificationUid = finalUid
-                                        verificationStatusCheckMessage = null
-                                        showEmailVerificationSentDialog = true
 
+                                        when (dispatchOutcome) {
+                                            is FirebaseService.VerificationDispatchOutcome.CustomSent -> {
+                                                isPendingEmailVerified = false
+                                                isVerificationDeliveryUncertain = false
+                                                resendCooldownSeconds = 30
+                                                verificationStatusCheckMessage = dispatchOutcome.message
+                                                authSuccessMessage = dispatchOutcome.message
+                                                Toast.makeText(
+                                                    context,
+                                                    dispatchOutcome.message,
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                            }
+                                            is FirebaseService.VerificationDispatchOutcome.FallbackSent -> {
+                                                isPendingEmailVerified = false
+                                                isVerificationDeliveryUncertain = false
+                                                resendCooldownSeconds = 30
+                                                verificationStatusCheckMessage = dispatchOutcome.message
+                                                authSuccessMessage = dispatchOutcome.message
+                                                Toast.makeText(
+                                                    context,
+                                                    dispatchOutcome.message,
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                            }
+                                            is FirebaseService.VerificationDispatchOutcome.DeliveryUncertain -> {
+                                                isPendingEmailVerified = false
+                                                isVerificationDeliveryUncertain = true
+                                                resendCooldownSeconds = 60
+                                                verificationStatusCheckMessage = dispatchOutcome.message
+                                                authSuccessMessage = dispatchOutcome.message
+                                                Toast.makeText(
+                                                    context,
+                                                    "Email delivery could not be confirmed. Please wait a few minutes before retrying.",
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                            }
+                                            is FirebaseService.VerificationDispatchOutcome.AlreadyVerified -> {
+                                                isPendingEmailVerified = true
+                                                isVerificationDeliveryUncertain = false
+                                                resendCooldownSeconds = 0
+                                                verificationStatusCheckMessage = dispatchOutcome.message
+                                                authSuccessMessage = dispatchOutcome.message
+                                                Toast.makeText(
+                                                    context,
+                                                    "Your email address is already verified!",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                            is FirebaseService.VerificationDispatchOutcome.Error -> {
+                                                isPendingEmailVerified = false
+                                                isVerificationDeliveryUncertain = false
+                                                resendCooldownSeconds = 0
+                                                verificationStatusCheckMessage = "❌ ${dispatchOutcome.message}"
+                                                authSuccessMessage = "Account created for $emailClean, but sending verification email failed. Please tap Resend below."
+                                                Toast.makeText(
+                                                    context,
+                                                    dispatchOutcome.message,
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                            }
+                                        }
+
+                                        showEmailVerificationSentDialog = true
                                         emailInput = emailClean
                                         passwordInput = ""
-
-                                        Toast.makeText(
-                                            context,
-                                            "Verification email sent to $emailClean. Please verify before logging in.",
-                                            Toast.LENGTH_LONG
-                                        ).show()
                                     } else {
+                                        FirebaseService.clearDeletedStudent(emailClean, finalUid)
+                                        FirebaseService.saveUserRecord(
+                                            uid = finalUid,
+                                            email = emailClean,
+                                            phone = phoneClean,
+                                            password = passwordInput.trim(),
+                                            name = nameInput.trim(),
+                                            signInMethod = "Phone Number",
+                                            emailVerified = true
+                                        )
+                                        val userProfile = UserProfile(
+                                            uid = finalUid,
+                                            name = nameInput.trim().ifBlank { "KCET Student" },
+                                            email = emailClean,
+                                            isPremium = false,
+                                            kcetTargetRank = "Under 1000",
+                                            targetStream = "Engineering (B.E / B.Tech)",
+                                            registrationDate = "2026",
+                                            signInMethod = "Phone Number"
+                                        )
+                                        FirebaseService.saveUserProfile(userProfile)
+
                                         isLoading = false
                                         isRegistering = false
                                         authErrorMessage = null
@@ -955,14 +1111,20 @@ fun AuthScreen(
                                                 FirebaseService.updateUserPasswordInFirestore(loginId, typedPassword)
                                             }
                                         } else {
-                                            val err = (signInRes.exceptionOrNull()?.message ?: "").lowercase()
-                                            val isWrongPassword = err.contains("invalid_login_credentials") ||
+                                            val signInExc = signInRes.exceptionOrNull()
+                                            val err = (signInExc?.message ?: "").lowercase()
+                                            val errorCode = (signInExc as? com.google.firebase.auth.FirebaseAuthException)?.errorCode?.uppercase() ?: ""
+                                            val isWrongPassword = errorCode == "ERROR_INVALID_CREDENTIAL" ||
+                                                    errorCode == "ERROR_WRONG_PASSWORD" ||
+                                                    err.contains("invalid_login_credentials") ||
                                                     err.contains("wrong_password") ||
                                                     err.contains("invalid-credential") ||
                                                     err.contains("wrong-password") ||
                                                     err.contains("invalid password") ||
-                                                    err.contains("invalid_credential")
-                                            val isUserNotFound = err.contains("user_not_found") ||
+                                                    err.contains("invalid_credential") ||
+                                                    err.contains("supplied auth credential")
+                                            val isUserNotFound = errorCode == "ERROR_USER_NOT_FOUND" ||
+                                                    err.contains("user_not_found") ||
                                                     err.contains("user-not-found") ||
                                                     err.contains("no user record")
 
@@ -1003,10 +1165,14 @@ fun AuthScreen(
                                                     currentAuthUser.reload().awaitResult()
                                                 } catch (_: Exception) {}
                                             }
-                                            val isEmailVerified = currentAuthUser?.isEmailVerified == true
+                                            val isAuthVerified = currentAuthUser?.isEmailVerified == true
+                                            val isFsVerified = accountRecord?.get("emailVerified")?.equals("true", ignoreCase = true) == true ||
+                                                    FirebaseService.isEmailVerifiedInFirestore(validUid) ||
+                                                    FirebaseService.isEmailVerifiedInFirestore(loginId)
+
+                                            val isEmailVerified = isAuthVerified || isFsVerified || currentAuthUser == null
 
                                             if (!isEmailVerified) {
-                                                try { FirebaseService.auth.signOut() } catch (_: Exception) {}
                                                 isLoading = false
                                                 authErrorMessage = "⚠️ Warning: Your email was not verified. Please verify your email before logging in."
                                                 Toast.makeText(context, "⚠️ Your email was not verified. Please verify your email before logging in.", Toast.LENGTH_LONG).show()
@@ -1016,7 +1182,10 @@ fun AuthScreen(
                                                 pendingVerificationName = accountRecord?.get("name")?.ifBlank { null } ?: userProfileDoc?.name?.ifBlank { null } ?: "KCET Student"
                                                 pendingVerificationPhone = accountRecord?.get("phone") ?: ""
                                                 pendingVerificationUid = validUid
-                                                verificationStatusCheckMessage = "Your email ($loginId) was not verified. Please check your inbox or spam folder for the verification link."
+                                                isPendingEmailVerified = false
+                                                isVerificationDeliveryUncertain = false
+                                                resendCooldownSeconds = 0
+                                                verificationStatusCheckMessage = "Your email ($loginId) is not verified yet. Please check your inbox or spam folder, or resend the verification email below."
                                                 showEmailVerificationSentDialog = true
                                                 return@launch
                                             }
@@ -1036,15 +1205,22 @@ fun AuthScreen(
                                             return@launch
                                         } else {
                                             isLoading = false
+                                            val signInExc = signInRes.exceptionOrNull()
+                                            val errLower = (signInExc?.message ?: "").lowercase()
+                                            val errorCode = (signInExc as? com.google.firebase.auth.FirebaseAuthException)?.errorCode?.uppercase() ?: ""
+                                            val isInvalidCredential = errorCode == "ERROR_INVALID_CREDENTIAL" ||
+                                                    errorCode == "ERROR_WRONG_PASSWORD" ||
+                                                    errLower.contains("invalid_login_credentials") ||
+                                                    errLower.contains("wrong-password") ||
+                                                    errLower.contains("invalid-credential") ||
+                                                    errLower.contains("supplied auth credential")
+
                                             if (accountRecord != null && storedPassword.isNotBlank()) {
-                                                authErrorMessage = "Login Failed: Incorrect password for '$loginId'. Please try again."
+                                                authErrorMessage = "Login Failed: Incorrect password for '$loginId'. If you recently reset your password or use Google Sign-In, enter your updated password or tap 'Continue with Google'."
+                                            } else if (isInvalidCredential) {
+                                                authErrorMessage = "Login Failed: Incorrect email/password, or this account uses Google Sign-In. Check your credentials, tap 'Forgot Password?', or 'Continue with Google'."
                                             } else {
-                                                val err = signInRes.exceptionOrNull()?.message ?: ""
-                                                if (err.contains("INVALID_LOGIN_CREDENTIALS") || err.contains("wrong-password")) {
-                                                    authErrorMessage = "Login Failed: Incorrect password for '$loginId'."
-                                                } else {
-                                                    authErrorMessage = "Account Not Registered: No account registered with '$loginId'. Please click 'Register Now' to create an account."
-                                                }
+                                                authErrorMessage = "Account Not Registered: No account registered with '$loginId'. Please click 'Register Now' to create an account."
                                             }
                                             Toast.makeText(context, authErrorMessage, Toast.LENGTH_LONG).show()
                                             return@launch
@@ -1548,6 +1724,7 @@ fun AuthScreen(
         var isForgotLoading by remember { mutableStateOf(false) }
 
         var isEmailSent by remember { mutableStateOf(false) }
+        var isDeliveryUncertain by remember { mutableStateOf(false) }
 
         var isSmsSent by remember { mutableStateOf(false) }
         var generatedSmsCode by remember { mutableStateOf("") }
@@ -1557,7 +1734,7 @@ fun AuthScreen(
         var isResetPasswordVisible by remember { mutableStateOf(false) }
 
         AlertDialog(
-            onDismissRequest = { showForgotPasswordDialog = false },
+            onDismissRequest = { if (!isForgotLoading) showForgotPasswordDialog = false },
             title = {
                 Text(
                     text = "🔑 Reset Password",
@@ -1581,11 +1758,14 @@ fun AuthScreen(
                         FilterChip(
                             selected = resetMode == "email",
                             onClick = {
-                                resetMode = "email"
-                                forgotMessage = null
-                                isEmailSent = false
-                                isSmsSent = false
-                                isOtpVerified = false
+                                if (!isForgotLoading) {
+                                    resetMode = "email"
+                                    forgotMessage = null
+                                    isEmailSent = false
+                                    isDeliveryUncertain = false
+                                    isSmsSent = false
+                                    isOtpVerified = false
+                                }
                             },
                             label = { Text("📧 Reset via Email") },
                             modifier = Modifier.weight(1f)
@@ -1593,11 +1773,14 @@ fun AuthScreen(
                         FilterChip(
                             selected = resetMode == "phone",
                             onClick = {
-                                resetMode = "phone"
-                                forgotMessage = null
-                                isEmailSent = false
-                                isSmsSent = false
-                                isOtpVerified = false
+                                if (!isForgotLoading) {
+                                    resetMode = "phone"
+                                    forgotMessage = null
+                                    isEmailSent = false
+                                    isDeliveryUncertain = false
+                                    isSmsSent = false
+                                    isOtpVerified = false
+                                }
                             },
                             label = { Text("📱 Reset via Phone") },
                             modifier = Modifier.weight(1f)
@@ -1613,12 +1796,15 @@ fun AuthScreen(
                                 forgotEmailInput = it
                                 forgotMessage = null
                                 isEmailSent = false
+                                isDeliveryUncertain = false
                             },
                             label = { Text("Registered Email Address") },
                             leadingIcon = { Icon(Icons.Default.Email, contentDescription = null) },
                             singleLine = true,
-                            enabled = !isEmailSent,
-                            modifier = Modifier.fillMaxWidth()
+                            enabled = !isForgotLoading && !isEmailSent && !isDeliveryUncertain,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("forgot_password_email_input")
                         )
                     } else {
                         OutlinedTextField(
@@ -1751,9 +1937,14 @@ fun AuthScreen(
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(
                             text = forgotMessage!!,
-                            color = if (isOtpVerified || isEmailSent) Color(0xFF16A34A) else Color(0xFFDC2626),
+                            color = when {
+                                isOtpVerified || isEmailSent -> Color(0xFF16A34A)
+                                isDeliveryUncertain -> Color(0xFFD97706)
+                                else -> Color(0xFFDC2626)
+                            },
                             fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.testTag("forgot_password_status_message")
                         )
                     }
                 }
@@ -1761,35 +1952,76 @@ fun AuthScreen(
             confirmButton = {
                 if (resetMode == "email") {
                     Button(
-                        enabled = !isForgotLoading && !isEmailSent,
+                        enabled = !isForgotLoading && !isEmailSent && !isDeliveryUncertain,
+                        modifier = Modifier.testTag("forgot_password_send_button"),
                         onClick = {
-                            val cleanEmail = forgotEmailInput.trim().lowercase()
-                            if (cleanEmail.isBlank() || !cleanEmail.contains("@")) {
-                                forgotMessage = "Please enter a valid email address (e.g. name@example.com)."
+                            val validation = PasswordResetService.validateEmail(forgotEmailInput)
+                            if (validation is EmailValidationResult.Invalid) {
+                                forgotMessage = validation.errorMessage
                                 return@Button
                             }
+                            val cleanEmail = (validation as EmailValidationResult.Valid).normalizedEmail
 
                             isForgotLoading = true
+                            forgotMessage = null
                             coroutineScope.launch {
-                                val accountRecord = FirebaseService.getUserAccountRecord(cleanEmail)
-                                isForgotLoading = false
-                                if (accountRecord != null) {
-                                    try {
-                                        FirebaseService.auth.sendPasswordResetEmail(cleanEmail)
-                                    } catch (_: Exception) {}
-
-                                    isEmailSent = true
-                                    forgotMessage = "✅ Password reset email sent to $cleanEmail! Please check your inbox for the reset link."
-                                } else {
-                                    forgotMessage = "❌ No registered account found for email '$cleanEmail'. Please check your email or click 'Register Now'."
+                                val registeredStatus = FirebaseService.checkEmailRegistered(cleanEmail)
+                                if (registeredStatus == false) {
+                                    isForgotLoading = false
+                                    forgotMessage = "⚠️ No registered account found for '$cleanEmail'. Please check your email address or click 'Register Now' to create an account."
+                                    return@launch
+                                }
+                                when (val result = PasswordResetService.instance.sendResetEmail(cleanEmail)) {
+                                    is PasswordResetBackendResult.EmailJsSent -> {
+                                        isForgotLoading = false
+                                        isEmailSent = true
+                                        forgotMessage = PasswordResetService.MSG_EMAILJS_SUCCESS
+                                    }
+                                    is PasswordResetBackendResult.FirebaseFallback -> {
+                                        val fbRes = with(FirebaseService) {
+                                            FirebaseService.auth.sendPasswordResetEmail(cleanEmail).awaitResult()
+                                        }
+                                        isForgotLoading = false
+                                        if (fbRes.isSuccess) {
+                                            isEmailSent = true
+                                            forgotMessage = PasswordResetService.MSG_EMAILJS_SUCCESS
+                                        } else {
+                                            val errDetail = fbRes.exceptionOrNull()?.localizedMessage
+                                            forgotMessage = if (!errDetail.isNullOrBlank()) {
+                                                "Unable to send password reset email: $errDetail"
+                                            } else {
+                                                "Unable to send password reset email. Please try again later."
+                                            }
+                                        }
+                                    }
+                                    is PasswordResetBackendResult.DeliveryUncertain -> {
+                                        // Uncertain delivery: do NOT call Firebase sendPasswordResetEmail() fallback
+                                        isForgotLoading = false
+                                        isDeliveryUncertain = true
+                                        forgotMessage = result.message
+                                    }
+                                    is PasswordResetBackendResult.Error -> {
+                                        isForgotLoading = false
+                                        forgotMessage = result.message
+                                    }
                                 }
                             }
                         }
                     ) {
                         if (isForgotLoading) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White)
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
                         } else {
-                            Text(if (isEmailSent) "Link Sent" else "Send Reset Email")
+                            Text(
+                                when {
+                                    isDeliveryUncertain -> "Processing..."
+                                    isEmailSent -> "Link Sent"
+                                    else -> "Send Reset Email"
+                                }
+                            )
                         }
                     }
                 } else {
@@ -1895,16 +2127,20 @@ fun AuthScreen(
                                         ?: FirebaseService.getUserAccountRecord(cleanPhone)
                                     if (accountRecord != null) {
                                         val storedAuthEmail = accountRecord["authEmail"] ?: "phone_${normPhone}@kcetapp.com"
-                                        val oldPassword = accountRecord["password"] ?: ""
+                                        val oldPassword = (accountRecord["password"] ?: "").trim()
                                         try {
-                                            val signInRes = with(FirebaseService) {
-                                                FirebaseService.auth.signInWithEmailAndPassword(storedAuthEmail, oldPassword).awaitResult()
+                                            val signInRes = if (oldPassword.length >= 6) {
+                                                with(FirebaseService) {
+                                                    FirebaseService.auth.signInWithEmailAndPassword(storedAuthEmail, oldPassword).awaitResult()
+                                                }
+                                            } else {
+                                                Result.failure(IllegalArgumentException("No valid previous Firebase password"))
                                             }
                                             if (signInRes.isSuccess) {
                                                 with(FirebaseService) {
                                                     FirebaseService.auth.currentUser?.updatePassword(resetNewPassword.trim())?.awaitResult()
                                                 }
-                                            } else {
+                                            } else if (oldPassword.length < 6) {
                                                 with(FirebaseService) {
                                                     FirebaseService.auth.createUserWithEmailAndPassword(storedAuthEmail, resetNewPassword.trim()).awaitResult()
                                                 }
@@ -1951,20 +2187,23 @@ fun AuthScreen(
                 onDismissRequest = {
                     showEmailVerificationSentDialog = false
                     isRegistering = false
+                    if (!isPendingEmailVerified) {
+                        try { FirebaseService.auth.signOut() } catch (_: Exception) {}
+                    }
                     emailInput = pendingVerificationEmail
                     passwordInput = ""
                 },
                 icon = {
                     Surface(
                         shape = CircleShape,
-                        color = Color(0xFFEFF6FF),
+                        color = if (isPendingEmailVerified) Color(0xFFDCFCE7) else Color(0xFFEFF6FF),
                         modifier = Modifier.size(60.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
-                                imageVector = Icons.Default.Email,
-                                contentDescription = "Verification Email Sent",
-                                tint = Color(0xFF1E66F5),
+                                imageVector = if (isPendingEmailVerified) Icons.Default.CheckCircle else Icons.Default.Email,
+                                contentDescription = if (isPendingEmailVerified) "Email Verified" else "Verification Email Sent",
+                                tint = if (isPendingEmailVerified) Color(0xFF16A34A) else Color(0xFF1E66F5),
                                 modifier = Modifier.size(32.dp)
                             )
                         }
@@ -1973,7 +2212,7 @@ fun AuthScreen(
                 title = {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            text = "Verify Your Email Address",
+                            text = if (isPendingEmailVerified) "Email Verified!" else "Verify Your Email Address",
                             fontWeight = FontWeight.Bold,
                             fontSize = 19.sp,
                             color = Color(0xFF0F172A),
@@ -1981,10 +2220,15 @@ fun AuthScreen(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Email verification required to complete registration",
+                            text = if (isPendingEmailVerified) {
+                                "Your account is ready"
+                            } else {
+                                "Email verification required to complete registration"
+                            },
                             fontSize = 12.sp,
                             color = Color(0xFF64748B),
-                            fontWeight = FontWeight.Medium
+                            fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.Center
                         )
                     }
                 },
@@ -2021,69 +2265,206 @@ fun AuthScreen(
                             }
                         }
 
-                        Text(
-                            text = "A verification link has been sent to your email address above. Please verify your email to finish creating your account.",
-                            fontSize = 13.sp,
-                            color = Color(0xFF334155),
-                            lineHeight = 18.sp
-                        )
+                        if (!isPendingEmailVerified) {
+                            Text(
+                                text = "Open the verification link sent to your email address above, then return here or tap 'Refresh Verification Status'.",
+                                fontSize = 13.sp,
+                                color = Color(0xFF334155),
+                                lineHeight = 18.sp
+                            )
 
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = Color(0xFFFEF3C7),
-                            border = BorderStroke(1.dp, Color(0xFFFDE68A)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = Color(0xFFFEF3C7),
+                                border = BorderStroke(1.dp, Color(0xFFFDE68A)),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text(
-                                    text = "⚠️ How to complete registration:",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp,
-                                    color = Color(0xFF92400E)
-                                )
-                                Text(
-                                    text = "1. Open your email inbox (or Spam/Junk folder).\n2. Click the verification link sent by Firebase.\n3. Tap 'Verify & Complete Registration' below.",
-                                    fontSize = 12.sp,
-                                    color = Color(0xFF78350F),
-                                    lineHeight = 16.sp
-                                )
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = "⚠️ How to complete registration:",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF92400E)
+                                    )
+                                    Text(
+                                        text = "1. Open your email inbox (or Spam/Junk folder).\n2. Click the verification link sent to you.\n3. Return here and tap 'Refresh Verification Status' or 'Verify & Complete Registration'.",
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF78350F),
+                                        lineHeight = 16.sp
+                                    )
+                                }
                             }
                         }
 
                         if (verificationStatusCheckMessage != null) {
-                            Text(
-                                text = verificationStatusCheckMessage!!,
-                                fontSize = 12.sp,
-                                color = if (verificationStatusCheckMessage!!.startsWith("✅")) Color(0xFF16A34A) else Color(0xFFDC2626),
-                                fontWeight = FontWeight.Medium
-                            )
+                            val msgText = verificationStatusCheckMessage!!
+                            val isWarnMsg = isVerificationDeliveryUncertain ||
+                                msgText.startsWith("⚠️") ||
+                                msgText.contains("could not confirm email delivery", ignoreCase = true)
+                            val isSuccessMsg = !isWarnMsg && (
+                                isPendingEmailVerified ||
+                                    msgText.startsWith("✅") ||
+                                    msgText.contains("sent successfully", ignoreCase = true) ||
+                                    msgText.contains("Verification email sent", ignoreCase = true) ||
+                                    msgText.contains("already verified", ignoreCase = true)
+                                )
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = when {
+                                    isSuccessMsg -> Color(0xFFECFDF5)
+                                    isWarnMsg -> Color(0xFFFFFBEB)
+                                    else -> Color(0xFFFEF2F2)
+                                },
+                                border = BorderStroke(
+                                    1.dp,
+                                    when {
+                                        isSuccessMsg -> Color(0xFF10B981)
+                                        isWarnMsg -> Color(0xFFF59E0B)
+                                        else -> Color(0xFFEF4444)
+                                    }
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("verification_status_banner")
+                            ) {
+                                Text(
+                                    text = msgText,
+                                    fontSize = 12.sp,
+                                    color = when {
+                                        isSuccessMsg -> Color(0xFF065F46)
+                                        isWarnMsg -> Color(0xFF92400E)
+                                        else -> Color(0xFF991B1B)
+                                    },
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.padding(10.dp)
+                                )
+                            }
                         }
 
-                        // Resend Link Button
+                        // Refresh Verification Status Button
                         OutlinedButton(
-                            enabled = !isResendingVerification && !isCheckingVerificationStatus,
+                            enabled = !isCheckingVerificationStatus && !isResendingVerification,
                             onClick = {
-                                if (pendingVerificationEmail.isNotBlank() && pendingVerificationPassword.isNotBlank()) {
+                                if (pendingVerificationEmail.isBlank()) {
+                                    verificationStatusCheckMessage = "❌ Registration email not found. Please try again."
+                                    return@OutlinedButton
+                                }
+                                isCheckingVerificationStatus = true
+                                verificationStatusCheckMessage = null
+                                coroutineScope.launch {
+                                    val refreshRes = FirebaseService.refreshEmailVerificationStatus(
+                                        email = pendingVerificationEmail,
+                                        password = pendingVerificationPassword.ifBlank { null }
+                                    )
+                                    if (refreshRes.isSuccess) {
+                                        val verified = refreshRes.getOrNull() == true
+                                        if (verified) {
+                                            isPendingEmailVerified = true
+                                            isVerificationDeliveryUncertain = false
+                                            val currentUser = FirebaseService.auth.currentUser
+                                            val uid = currentUser?.uid ?: pendingVerificationUid.ifBlank { "std_${System.currentTimeMillis()}" }
+                                            FirebaseService.clearDeletedStudent(pendingVerificationEmail, uid)
+                                            if (pendingVerificationPassword.isNotBlank()) {
+                                                FirebaseService.saveUserRecord(
+                                                    uid = uid,
+                                                    email = pendingVerificationEmail,
+                                                    phone = pendingVerificationPhone,
+                                                    password = pendingVerificationPassword,
+                                                    name = pendingVerificationName,
+                                                    signInMethod = "Email & Password",
+                                                    emailVerified = true
+                                                )
+                                            }
+                                            FirebaseService.updateUserEmailVerified(uid, pendingVerificationEmail)
+                                            isCheckingVerificationStatus = false
+                                            Toast.makeText(context, "🎉 Email verified! Registration complete.", Toast.LENGTH_LONG).show()
+                                            showEmailVerificationSentDialog = false
+                                            isRegistering = false
+                                            onLoginSuccess(pendingVerificationEmail, pendingVerificationName.ifBlank { "KCET Student" }, "Email & Password")
+                                        } else {
+                                            isCheckingVerificationStatus = false
+                                            isPendingEmailVerified = false
+                                            verificationStatusCheckMessage = "Email not verified yet. Please click the link in your inbox."
+                                        }
+                                    } else {
+                                        isCheckingVerificationStatus = false
+                                        verificationStatusCheckMessage = "❌ Could not refresh status: ${refreshRes.exceptionOrNull()?.localizedMessage ?: "Please try again."}"
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("refresh_verification_status_button"),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            if (isCheckingVerificationStatus) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Refreshing status...", fontSize = 12.sp)
+                            } else {
+                                Icon(Icons.Default.Refresh, contentDescription = "Refresh Verification Status", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Refresh Verification Status", fontSize = 12.sp)
+                            }
+                        }
+
+                        // Resend Verification Email Button (with cooldown & backend dispatch)
+                        OutlinedButton(
+                            enabled = !isResendingVerification && !isCheckingVerificationStatus && !isPendingEmailVerified && resendCooldownSeconds == 0,
+                            onClick = {
+                                if (pendingVerificationEmail.isNotBlank()) {
                                     isResendingVerification = true
                                     verificationStatusCheckMessage = null
                                     coroutineScope.launch {
-                                        val res = FirebaseService.resendEmailVerification(pendingVerificationEmail, pendingVerificationPassword)
+                                        val outcome = FirebaseService.sendVerificationEmailViaBackend(
+                                            email = pendingVerificationEmail,
+                                            password = pendingVerificationPassword.ifBlank { null },
+                                            userOverride = FirebaseService.auth.currentUser
+                                        )
                                         isResendingVerification = false
-                                        if (res.isSuccess) {
-                                            verificationStatusCheckMessage = "✅ Verification email resent! Please check your inbox."
-                                            Toast.makeText(context, "Verification email resent successfully!", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            verificationStatusCheckMessage = "❌ Could not resend: ${res.exceptionOrNull()?.localizedMessage}"
+                                        when (outcome) {
+                                            is FirebaseService.VerificationDispatchOutcome.CustomSent -> {
+                                                isVerificationDeliveryUncertain = false
+                                                resendCooldownSeconds = 30
+                                                verificationStatusCheckMessage = outcome.message
+                                                Toast.makeText(context, "Custom KCET GenZ verification email resent!", Toast.LENGTH_SHORT).show()
+                                            }
+                                            is FirebaseService.VerificationDispatchOutcome.FallbackSent -> {
+                                                isVerificationDeliveryUncertain = false
+                                                resendCooldownSeconds = 30
+                                                verificationStatusCheckMessage = outcome.message
+                                                Toast.makeText(context, "Verification email resent!", Toast.LENGTH_SHORT).show()
+                                            }
+                                            is FirebaseService.VerificationDispatchOutcome.DeliveryUncertain -> {
+                                                isVerificationDeliveryUncertain = true
+                                                resendCooldownSeconds = 60
+                                                verificationStatusCheckMessage = outcome.message
+                                                Toast.makeText(context, "Delivery uncertain. Wait a few minutes before retrying.", Toast.LENGTH_LONG).show()
+                                            }
+                                            is FirebaseService.VerificationDispatchOutcome.AlreadyVerified -> {
+                                                isPendingEmailVerified = true
+                                                isVerificationDeliveryUncertain = false
+                                                resendCooldownSeconds = 0
+                                                verificationStatusCheckMessage = outcome.message
+                                                Toast.makeText(context, "Email is already verified!", Toast.LENGTH_SHORT).show()
+                                            }
+                                            is FirebaseService.VerificationDispatchOutcome.Error -> {
+                                                verificationStatusCheckMessage = "❌ ${outcome.message}"
+                                            }
                                         }
                                     }
                                 } else {
                                     Toast.makeText(context, "Registration details missing. Please try registering again.", Toast.LENGTH_SHORT).show()
                                 }
                             },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("resend_verification_button"),
                             shape = RoundedCornerShape(8.dp)
                         ) {
                             if (isResendingVerification) {
@@ -2091,9 +2472,16 @@ fun AuthScreen(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text("Resending...")
                             } else {
-                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.Send, contentDescription = "Resend Verification Email", modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Resend Verification Email", fontSize = 12.sp)
+                                Text(
+                                    text = if (resendCooldownSeconds > 0) {
+                                        "Resend Verification Email (${resendCooldownSeconds}s)"
+                                    } else {
+                                        "Resend Verification Email"
+                                    },
+                                    fontSize = 12.sp
+                                )
                             }
                         }
                     }
@@ -2102,49 +2490,54 @@ fun AuthScreen(
                     Button(
                         enabled = !isCheckingVerificationStatus && !isResendingVerification,
                         onClick = {
-                            if (pendingVerificationEmail.isBlank() || pendingVerificationPassword.isBlank()) {
+                            if (pendingVerificationEmail.isBlank()) {
                                 verificationStatusCheckMessage = "❌ Registration details not found. Please try again."
                                 return@Button
                             }
                             isCheckingVerificationStatus = true
                             verificationStatusCheckMessage = null
                             coroutineScope.launch {
-                                var currentUser = FirebaseService.auth.currentUser
-                                if (currentUser == null || currentUser.email?.equals(pendingVerificationEmail, ignoreCase = true) != true) {
-                                    try {
-                                        val signInRes = FirebaseService.auth.signInWithEmailAndPassword(pendingVerificationEmail, pendingVerificationPassword).awaitResult()
-                                        currentUser = signInRes.getOrNull()?.user ?: FirebaseService.auth.currentUser
-                                    } catch (_: Exception) {}
+                                val refreshRes = if (isPendingEmailVerified) {
+                                    Result.success(true)
+                                } else {
+                                    FirebaseService.refreshEmailVerificationStatus(
+                                        email = pendingVerificationEmail,
+                                        password = pendingVerificationPassword.ifBlank { null }
+                                    )
                                 }
 
-                                if (currentUser != null) {
-                                    try {
-                                        currentUser.reload().awaitResult()
-                                    } catch (_: Exception) {}
-                                }
+                                val currentUser = FirebaseService.auth.currentUser
+                                val isAuthVerified = refreshRes.getOrNull() == true ||
+                                    (currentUser != null && currentUser.email?.equals(pendingVerificationEmail, ignoreCase = true) == true && currentUser.isEmailVerified)
 
-                                val isVerified = currentUser?.isEmailVerified == true
-                                if (!isVerified) {
+                                if (!isAuthVerified) {
                                     isCheckingVerificationStatus = false
-                                    try { FirebaseService.auth.signOut() } catch (_: Exception) {}
-                                    verificationStatusCheckMessage = "❌ Email was not verified yet. Please click the link sent to your email and try again."
-                                    Toast.makeText(context, "Your email was not verified. Please verify your email before logging in.", Toast.LENGTH_LONG).show()
+                                    isPendingEmailVerified = false
+                                    val errDetail = refreshRes.exceptionOrNull()?.localizedMessage
+                                    verificationStatusCheckMessage = if (!errDetail.isNullOrBlank()) {
+                                        "❌ Unable to verify yet: $errDetail"
+                                    } else {
+                                        "❌ Email is not verified yet. Please click the verification link sent to $pendingVerificationEmail first, then tap Refresh."
+                                    }
+                                    Toast.makeText(context, "Please verify your email link first.", Toast.LENGTH_SHORT).show()
                                     return@launch
                                 }
 
+                                isPendingEmailVerified = true
                                 val uid = currentUser?.uid ?: pendingVerificationUid.ifBlank { "std_${System.currentTimeMillis()}" }
 
-                                // Complete registration and save user record as verified!
                                 FirebaseService.clearDeletedStudent(pendingVerificationEmail, uid)
-                                FirebaseService.saveUserRecord(
-                                    uid = uid,
-                                    email = pendingVerificationEmail,
-                                    phone = pendingVerificationPhone,
-                                    password = pendingVerificationPassword,
-                                    name = pendingVerificationName,
-                                    signInMethod = "Email & Password",
-                                    emailVerified = true
-                                )
+                                if (pendingVerificationPassword.isNotBlank()) {
+                                    FirebaseService.saveUserRecord(
+                                        uid = uid,
+                                        email = pendingVerificationEmail,
+                                        phone = pendingVerificationPhone,
+                                        password = pendingVerificationPassword,
+                                        name = pendingVerificationName,
+                                        signInMethod = "Email & Password",
+                                        emailVerified = true
+                                    )
+                                }
                                 FirebaseService.updateUserEmailVerified(uid, pendingVerificationEmail)
 
                                 isCheckingVerificationStatus = false
@@ -2155,14 +2548,17 @@ fun AuthScreen(
                             }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0256FF)),
-                        shape = RoundedCornerShape(10.dp)
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("verify_complete_registration_button")
                     ) {
                         if (isCheckingVerificationStatus) {
                             CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Checking...")
                         } else {
-                            Text("Verify & Complete Registration")
+                            Text(if (isPendingEmailVerified) "Continue to App" else "Verify & Complete Registration")
                         }
                     }
                 },
@@ -2171,9 +2567,13 @@ fun AuthScreen(
                         onClick = {
                             showEmailVerificationSentDialog = false
                             isRegistering = false
+                            if (!isPendingEmailVerified) {
+                                try { FirebaseService.auth.signOut() } catch (_: Exception) {}
+                            }
                             emailInput = pendingVerificationEmail
                             passwordInput = ""
-                        }
+                        },
+                        modifier = Modifier.heightIn(min = 48.dp)
                     ) {
                         Text("Cancel")
                     }

@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -206,6 +207,61 @@ object FirebaseService {
         }
     }
 
+    /**
+     * Checks whether an email address is registered in Firestore (`user_accounts`, `users`, or `registered_mentors`).
+     * Returns `true` if registered, `false` if definitively not registered, or `null` if Firestore could not be reached.
+     */
+    suspend fun checkEmailRegistered(email: String): Boolean? {
+        val cleanEmail = email.lowercase().trim()
+        if (cleanEmail.isBlank() || !cleanEmail.contains("@")) return false
+        if (cleanEmail == "ullassuvarna65@gmail.com" || cleanEmail == "ullassuvarna85@gmail.com") return true
+
+        val emailDocId = cleanEmail.replace(".", "_").replace("@", "_")
+        var hadQueryError = false
+
+        val accRes = firestore.collection("user_accounts").document(cleanEmail).get().awaitResult()
+        if (accRes.isFailure) hadQueryError = true
+        if (accRes.getOrNull()?.exists() == true) return true
+
+        val userDocRes = firestore.collection("users").document(emailDocId).get().awaitResult()
+        if (userDocRes.isFailure) hadQueryError = true
+        if (userDocRes.getOrNull()?.exists() == true) return true
+
+        val usersByEmailRes = firestore.collection("users")
+            .whereEqualTo("email", cleanEmail)
+            .limit(1)
+            .get()
+            .awaitResult()
+        if (usersByEmailRes.isFailure) hadQueryError = true
+        if (usersByEmailRes.getOrNull()?.isEmpty == false) return true
+
+        val accByEmailRes = firestore.collection("user_accounts")
+            .whereEqualTo("email", cleanEmail)
+            .limit(1)
+            .get()
+            .awaitResult()
+        if (accByEmailRes.isFailure) hadQueryError = true
+        if (accByEmailRes.getOrNull()?.isEmpty == false) return true
+
+        val mentorDocRes = firestore.collection("registered_mentors").document(cleanEmail).get().awaitResult()
+        if (mentorDocRes.isFailure) hadQueryError = true
+        if (mentorDocRes.getOrNull()?.exists() == true) return true
+
+        val mentorDocIdRes = firestore.collection("registered_mentors").document(emailDocId).get().awaitResult()
+        if (mentorDocIdRes.isFailure) hadQueryError = true
+        if (mentorDocIdRes.getOrNull()?.exists() == true) return true
+
+        val mentorByEmailRes = firestore.collection("registered_mentors")
+            .whereEqualTo("email", cleanEmail)
+            .limit(1)
+            .get()
+            .awaitResult()
+        if (mentorByEmailRes.isFailure) hadQueryError = true
+        if (mentorByEmailRes.getOrNull()?.isEmpty == false) return true
+
+        return if (hadQueryError) null else false
+    }
+
     fun isValidIndianPhoneNumber(phone: String): Boolean {
         val clean = phone.trim().replace(" ", "").replace("-", "")
         val digitsOnly = when {
@@ -389,21 +445,183 @@ object FirebaseService {
                 }
         }
 
-    suspend fun resendEmailVerification(email: String, password: String): Result<Unit> {
-        return try {
-            val cleanEmail = email.lowercase().trim()
+    sealed class VerificationDispatchOutcome {
+        data class CustomSent(val message: String) : VerificationDispatchOutcome()
+        data class FallbackSent(val message: String) : VerificationDispatchOutcome()
+        data class DeliveryUncertain(val message: String) : VerificationDispatchOutcome()
+        data class AlreadyVerified(val message: String) : VerificationDispatchOutcome()
+        data class Error(val message: String, val isAuthError: Boolean = false) : VerificationDispatchOutcome()
+    }
+
+    suspend fun sendVerificationEmailViaBackend(
+        email: String = auth.currentUser?.email.orEmpty(),
+        password: String? = null,
+        userOverride: FirebaseUser? = auth.currentUser
+    ): VerificationDispatchOutcome = dispatchVerificationEmail(
+        email = email,
+        password = password,
+        userOverride = userOverride
+    )
+
+    suspend fun dispatchVerificationEmail(
+        email: String,
+        password: String? = null,
+        userOverride: FirebaseUser? = null
+    ): VerificationDispatchOutcome {
+        val cleanEmail = email.lowercase().trim()
+        var activeUser = userOverride ?: auth.currentUser
+        Log.d(
+            TAG,
+            "sendVerificationEmailViaBackend: userOverridePresent=${userOverride != null}, authCurrentUserPresent=${auth.currentUser != null}"
+        )
+
+        if ((activeUser == null || (cleanEmail.isNotBlank() && activeUser.email?.equals(cleanEmail, ignoreCase = true) != true)) && !password.isNullOrBlank()) {
+            Log.d(TAG, "sendVerificationEmailViaBackend: signing in to restore FirebaseUser session")
             val signInRes = auth.signInWithEmailAndPassword(cleanEmail, password.trim()).awaitResult()
             if (signInRes.isFailure) {
-                return Result.failure(signInRes.exceptionOrNull() ?: Exception("Unable to authenticate with provided credentials"))
+                val exc = signInRes.exceptionOrNull()
+                Log.w(TAG, "sendVerificationEmailViaBackend: re-auth failed (${exc?.javaClass?.simpleName})")
+                return VerificationDispatchOutcome.Error(
+                    message = exc?.localizedMessage ?: "Unable to authenticate $cleanEmail. Please check your credentials and try again.",
+                    isAuthError = true
+                )
             }
-            val currentUser = auth.currentUser ?: return Result.failure(Exception("No user logged in"))
-            val sendRes = sendUserVerificationEmail(currentUser)
-            // Sign out to maintain security until verified
-            auth.signOut()
-            sendRes
+            activeUser = signInRes.getOrNull()?.user ?: auth.currentUser
+        }
+
+        if (activeUser == null) {
+            Log.w(TAG, "sendVerificationEmailViaBackend: no authenticated FirebaseUser available")
+            return VerificationDispatchOutcome.Error(
+                message = "Authentication session expired or missing. Please sign in again to resend the verification email.",
+                isAuthError = true
+            )
+        }
+
+        try {
+            activeUser.reload().awaitResult()
         } catch (e: Exception) {
-            try { auth.signOut() } catch (_: Exception) {}
+            Log.w(TAG, "sendVerificationEmailViaBackend: non-fatal user reload failed (${e.javaClass.simpleName})")
+        }
+        activeUser = auth.currentUser ?: activeUser
+
+        if (activeUser.isEmailVerified) {
+            val targetEmail = activeUser.email?.lowercase()?.trim().orEmpty().ifBlank { cleanEmail }
+            Log.d(TAG, "sendVerificationEmailViaBackend: FirebaseUser uid=${activeUser.uid} is already verified")
+            updateUserEmailVerified(activeUser.uid, targetEmail)
+            return VerificationDispatchOutcome.AlreadyVerified(EmailVerificationService.MSG_ALREADY_VERIFIED)
+        }
+
+        return resolveBackendResultWithFallback(
+            result = EmailVerificationService.instance.sendVerificationEmail(activeUser),
+            targetEmail = activeUser.email?.lowercase()?.trim().orEmpty().ifBlank { cleanEmail },
+            fallbackSender = { sendUserVerificationEmail(activeUser) }
+        )
+    }
+
+    internal suspend fun resolveBackendResultWithFallback(
+        result: EmailVerificationBackendResult,
+        targetEmail: String,
+        fallbackSender: suspend () -> Result<Unit>
+    ): VerificationDispatchOutcome {
+        return when (result) {
+            is EmailVerificationBackendResult.CustomEmailSent -> {
+                Log.d(TAG, "sendVerificationEmailViaBackend: CustomEmailSent via provider=${result.provider}")
+                VerificationDispatchOutcome.CustomSent(result.message)
+            }
+            is EmailVerificationBackendResult.AlreadyVerified -> {
+                Log.d(TAG, "sendVerificationEmailViaBackend: backend reported alreadyVerified")
+                auth.currentUser?.let { current ->
+                    updateUserEmailVerified(current.uid, current.email ?: targetEmail)
+                }
+                VerificationDispatchOutcome.AlreadyVerified(result.message)
+            }
+            is EmailVerificationBackendResult.DeliveryUncertain -> {
+                // Uncertain delivery: instruct user to wait a few minutes; do not trigger Firebase fallback
+                Log.w(TAG, "sendVerificationEmailViaBackend: deliveryUncertain — skipping Firebase fallback")
+                VerificationDispatchOutcome.DeliveryUncertain(result.message)
+            }
+            is EmailVerificationBackendResult.FirebaseFallback -> {
+                Log.d(TAG, "sendVerificationEmailViaBackend: backend requested fallbackToFirebase — invoking sendEmailVerification")
+                val fbRes = fallbackSender()
+                if (fbRes.isSuccess) {
+                    VerificationDispatchOutcome.FallbackSent(
+                        "Verification email sent to $targetEmail. Please check your inbox and spam folder."
+                    )
+                } else {
+                    VerificationDispatchOutcome.Error(
+                        fbRes.exceptionOrNull()?.localizedMessage
+                            ?: "Unable to send verification email right now. Please try again later."
+                    )
+                }
+            }
+            is EmailVerificationBackendResult.Error -> {
+                Log.w(
+                    TAG,
+                    "sendVerificationEmailViaBackend: backend error httpCode=${result.httpCode}, isNetworkError=${result.isNetworkError}; attempting Firebase fallback"
+                )
+                val fbRes = fallbackSender()
+                if (fbRes.isSuccess) {
+                    VerificationDispatchOutcome.FallbackSent(
+                        "Verification email sent to $targetEmail. Please check your inbox and spam folder."
+                    )
+                } else {
+                    val fbErr = fbRes.exceptionOrNull()?.localizedMessage
+                    val combinedMessage = if (!fbErr.isNullOrBlank()) {
+                        "${result.message} Fallback error: $fbErr"
+                    } else {
+                        result.message
+                    }
+                    VerificationDispatchOutcome.Error(
+                        message = combinedMessage,
+                        isAuthError = result.isAuthError
+                    )
+                }
+            }
+        }
+    }
+
+    suspend fun refreshEmailVerificationStatus(
+        email: String,
+        password: String? = null
+    ): Result<Boolean> {
+        return try {
+            val cleanEmail = email.lowercase().trim()
+            var current = auth.currentUser
+            if ((current == null || (cleanEmail.isNotBlank() && current.email?.equals(cleanEmail, ignoreCase = true) != true)) && !password.isNullOrBlank()) {
+                val signInRes = auth.signInWithEmailAndPassword(cleanEmail, password.trim()).awaitResult()
+                current = signInRes.getOrNull()?.user ?: auth.currentUser
+            }
+            if (current == null) {
+                val fsVerified = isEmailVerifiedInFirestore(cleanEmail)
+                return Result.success(fsVerified)
+            }
+            val reloadRes = current.reload().awaitResult()
+            if (reloadRes.isFailure) {
+                val fsVerified = isEmailVerifiedInFirestore(cleanEmail)
+                return if (current.isEmailVerified || fsVerified) {
+                    Result.success(true)
+                } else {
+                    Result.failure(reloadRes.exceptionOrNull() ?: Exception("Unable to refresh verification status"))
+                }
+            }
+            val refreshed = auth.currentUser ?: current
+            val verified = refreshed.isEmailVerified
+            if (verified) {
+                updateUserEmailVerified(refreshed.uid, refreshed.email ?: cleanEmail)
+            }
+            Result.success(verified)
+        } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    suspend fun resendEmailVerification(email: String, password: String): Result<Unit> {
+        return when (val outcome = dispatchVerificationEmail(email, password)) {
+            is VerificationDispatchOutcome.CustomSent,
+            is VerificationDispatchOutcome.FallbackSent,
+            is VerificationDispatchOutcome.AlreadyVerified -> Result.success(Unit)
+            is VerificationDispatchOutcome.DeliveryUncertain -> Result.failure(Exception(outcome.message))
+            is VerificationDispatchOutcome.Error -> Result.failure(Exception(outcome.message))
         }
     }
 
@@ -541,7 +759,7 @@ object FirebaseService {
             if (uid.isNotBlank()) clearDeletedStudent("", uid)
         } catch (_: Exception) {}
         val formattedId = profile.formattedStudentId
-        val now = if (profile.lastUpdatedMillis > 0L) profile.lastUpdatedMillis else System.currentTimeMillis()
+        val now = System.currentTimeMillis()
         val userMap = mapOf(
             "uid" to uid,
             "name" to profile.name,
@@ -552,7 +770,10 @@ object FirebaseService {
             "targetStream" to profile.targetStream,
             "registrationDate" to profile.registrationDate,
             "isForceLoggedOut" to profile.isForceLoggedOut,
+            "forceLogout" to profile.isForceLoggedOut,
             "isBlocked" to profile.isBlocked,
+            "blocked" to profile.isBlocked,
+            "status" to (if (profile.isBlocked) "BLOCKED" else "ACTIVE"),
             "blockReason" to profile.blockReason,
             "signInMethod" to profile.signInMethod,
             "studentId" to formattedId,
@@ -567,6 +788,24 @@ object FirebaseService {
             }
             firestore.collection("user_accounts").document(cleanEmail).set(userMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
         }
+
+        try {
+            val safeKey = uid.replace(".", "_").replace("@", "_")
+            val statusMap = mapOf<String, Any>(
+                "isBlocked" to profile.isBlocked,
+                "blocked" to profile.isBlocked,
+                "status" to (if (profile.isBlocked) "BLOCKED" else "ACTIVE"),
+                "blockReason" to profile.blockReason,
+                "isForceLoggedOut" to profile.isForceLoggedOut,
+                "forceLogout" to profile.isForceLoggedOut
+            )
+            realtimeDb.getReference("user_status").child(safeKey).setValue(statusMap)
+            if (cleanEmail.isNotBlank()) {
+                val safeEmailKey = cleanEmail.replace(".", "_").replace("@", "_")
+                realtimeDb.getReference("user_status").child(safeEmailKey).setValue(statusMap)
+            }
+        } catch (_: Exception) {}
+
         return res.isSuccess
     }
 
@@ -656,8 +895,14 @@ object FirebaseService {
                     if (emailDocId.isNotBlank()) setPremiumOverride(emailDocId, true)
                 }
 
-                val isAnyBlocked = docs.any { it.getBoolean("isBlocked") == true }
-                val blockReason = docs.firstOrNull { !(it.getString("blockReason").isNullOrBlank()) }?.getString("blockReason") ?: ""
+                val status = (doc.getString("status") ?: "").trim()
+                val isBlocked = if (status.equals("ACTIVE", ignoreCase = true)) false else (
+                    extractBoolean(doc, "isBlocked", "blocked") == true ||
+                    status.equals("BLOCKED", ignoreCase = true)
+                )
+                val blockReason = if (isBlocked) (docs.firstOrNull { !(it.getString("blockReason").isNullOrBlank()) }?.getString("blockReason") 
+                    ?: docs.firstOrNull { !(it.getString("reason").isNullOrBlank()) }?.getString("reason") 
+                    ?: "") else ""
                 val foundStudentId = docs.firstOrNull { !it.getString("studentId").isNullOrBlank() }?.getString("studentId") ?: ""
 
                 UserProfile(
@@ -669,8 +914,10 @@ object FirebaseService {
                     kcetTargetRank = doc.getString("kcetTargetRank") ?: "Under 1000",
                     targetStream = doc.getString("targetStream") ?: "Engineering (B.E / B.Tech)",
                     registrationDate = doc.getString("registrationDate") ?: "2026",
-                    isForceLoggedOut = docs.any { it.getBoolean("isForceLoggedOut") == true },
-                    isBlocked = isAnyBlocked,
+                    isForceLoggedOut = if (status.equals("ACTIVE", ignoreCase = true)) false else (
+                        extractBoolean(doc, "isForceLoggedOut", "forceLogout") == true
+                    ),
+                    isBlocked = isBlocked,
                     blockReason = blockReason,
                     signInMethod = extractSignInMethod(doc),
                     studentId = foundStudentId,
@@ -693,9 +940,19 @@ object FirebaseService {
         val cleanUid = uid.trim()
 
         var currentProfile: UserProfile? = null
+        var hasFirestoreProfile = false
+        var latestFirestoreUpdatedAt = 0L
+        var latestFirestoreBlocked = false
 
-        fun emitUpdatedProfile(incoming: UserProfile?) {
+        fun emitUpdatedProfile(incoming: UserProfile?, fromFirestore: Boolean = false) {
             if (incoming != null) {
+                if (fromFirestore) {
+                    hasFirestoreProfile = true
+                    if (incoming.lastUpdatedMillis >= latestFirestoreUpdatedAt) {
+                        latestFirestoreUpdatedAt = incoming.lastUpdatedMillis
+                        latestFirestoreBlocked = incoming.isBlocked
+                    }
+                }
                 currentProfile = incoming
                 setPremiumOverride(incoming.uid, incoming.isPremium)
                 if (incoming.email.isNotBlank()) setPremiumOverride(incoming.email, incoming.isPremium)
@@ -722,6 +979,15 @@ object FirebaseService {
                 if (sEmail.isNotBlank()) setPremiumOverride(sEmail, true)
             }
 
+            val status = (snapshot.getString("status") ?: "").trim()
+            val rawBlocked = extractBoolean(snapshot, "isBlocked", "blocked") == true
+            val isBlocked = if (status.equals("ACTIVE", ignoreCase = true)) false else (rawBlocked || status.equals("BLOCKED", ignoreCase = true))
+            val blockReason = if (isBlocked) (snapshot.getString("blockReason") ?: snapshot.getString("reason") ?: "") else ""
+
+            val isForceLoggedOut = if (status.equals("ACTIVE", ignoreCase = true)) false else (
+                extractBoolean(snapshot, "isForceLoggedOut", "forceLogout") == true
+            )
+
             return UserProfile(
                 uid = sUid,
                 name = snapshot.getString("name") ?: "Karthik Gowda",
@@ -731,12 +997,12 @@ object FirebaseService {
                 kcetTargetRank = snapshot.getString("kcetTargetRank") ?: "Under 1000",
                 targetStream = snapshot.getString("targetStream") ?: "Engineering (B.E / B.Tech)",
                 registrationDate = snapshot.getString("registrationDate") ?: "2026",
-                isForceLoggedOut = snapshot.getBoolean("isForceLoggedOut") ?: false,
-                isBlocked = snapshot.getBoolean("isBlocked") ?: false,
-                blockReason = snapshot.getString("blockReason") ?: "",
+                isForceLoggedOut = isForceLoggedOut,
+                isBlocked = isBlocked,
+                blockReason = blockReason,
                 signInMethod = extractSignInMethod(snapshot),
                 studentId = snapshot.getString("studentId") ?: "",
-                lastUpdatedMillis = snapshot.getLong("lastUpdatedMillis") ?: System.currentTimeMillis()
+                lastUpdatedMillis = snapshot.getLong("lastUpdatedMillis") ?: 0L
             )
         }
 
@@ -745,7 +1011,7 @@ object FirebaseService {
                 .addSnapshotListener { snapshot, error ->
                     if (error == null && snapshot != null && snapshot.exists()) {
                         val profile = parseDoc(snapshot, cleanUid)
-                        emitUpdatedProfile(profile)
+                        emitUpdatedProfile(profile, fromFirestore = true)
                     }
                 }
         } else null
@@ -755,7 +1021,7 @@ object FirebaseService {
                 .addSnapshotListener { snapshot, error ->
                     if (error == null && snapshot != null && snapshot.exists()) {
                         val profile = parseDoc(snapshot, cleanUid.ifBlank { emailDocId })
-                        emitUpdatedProfile(profile)
+                        emitUpdatedProfile(profile, fromFirestore = true)
                     }
                 }
         } else null
@@ -765,7 +1031,7 @@ object FirebaseService {
                 .addSnapshotListener { snapshot, error ->
                     if (error == null && snapshot != null && snapshot.exists()) {
                         val profile = parseDoc(snapshot, cleanUid.ifBlank { cleanEmail })
-                        emitUpdatedProfile(profile)
+                        emitUpdatedProfile(profile, fromFirestore = true)
                     }
                 }
         } else null
@@ -776,12 +1042,12 @@ object FirebaseService {
                     if (error == null && snapshot != null && !snapshot.isEmpty) {
                         val doc = snapshot.documents.maxByOrNull { it.getLong("lastUpdatedMillis") ?: 0L } ?: snapshot.documents.first()
                         val profile = parseDoc(doc, cleanUid.ifBlank { cleanEmail })
-                        emitUpdatedProfile(profile)
+                        emitUpdatedProfile(profile, fromFirestore = true)
                     }
                 }
         } else null
 
-        // Realtime Database listeners for sub-50ms instant premium push!
+        // Realtime Database listeners for sub-50ms instant premium, status, block, and logout push!
         val rtdbListeners = mutableListOf<Pair<com.google.firebase.database.DatabaseReference, com.google.firebase.database.ValueEventListener>>()
         val rtdbKeys = mutableSetOf<String>()
         if (cleanUid.isNotBlank()) rtdbKeys.add(cleanUid.replace(".", "_").replace("@", "_"))
@@ -791,8 +1057,9 @@ object FirebaseService {
         }
 
         rtdbKeys.forEach { key ->
-            val ref = realtimeDb.getReference("user_premium").child(key)
-            val listener = object : com.google.firebase.database.ValueEventListener {
+            // 1. RTDB user_premium
+            val premRef = realtimeDb.getReference("user_premium").child(key)
+            val premListener = object : com.google.firebase.database.ValueEventListener {
                 override fun onDataChange(snapshot: com.google.firebase.database.DataSnapshot) {
                     val isPrem = extractBooleanFromRtdb(snapshot)
                     if (isPrem != null) {
@@ -806,8 +1073,73 @@ object FirebaseService {
                 }
                 override fun onCancelled(error: com.google.firebase.database.DatabaseError) {}
             }
-            ref.addValueEventListener(listener)
-            rtdbListeners.add(Pair(ref, listener))
+            premRef.addValueEventListener(premListener)
+            rtdbListeners.add(Pair(premRef, premListener))
+
+            // 2. RTDB user_status (Fast-Path Block & Force Logout)
+            val statusRef = realtimeDb.getReference("user_status").child(key)
+            val statusListener = object : com.google.firebase.database.ValueEventListener {
+                override fun onDataChange(snapshot: com.google.firebase.database.DataSnapshot) {
+                    if (!snapshot.exists()) return
+                    val rtdbForceLogout = snapshot.child("isForceLoggedOut").getValue(Boolean::class.java)
+                        ?: snapshot.child("forceLogout").getValue(Boolean::class.java)
+                        ?: false
+                    val rtdbBlocked = snapshot.child("isBlocked").getValue(Boolean::class.java)
+                        ?: snapshot.child("blocked").getValue(Boolean::class.java)
+                        ?: false
+                    val rtdbStatus = (snapshot.child("status").getValue(String::class.java) ?: "").trim()
+                    val rtdbReason = snapshot.child("blockReason").getValue(String::class.java)
+                        ?: snapshot.child("reason").getValue(String::class.java) ?: ""
+                    val rtdbUpdatedAt = snapshot.child("updatedAt").getValue(Long::class.java) ?: 0L
+                    val isBlockedEffective = if (rtdbStatus.equals("ACTIVE", ignoreCase = true)) false else (rtdbBlocked || rtdbStatus.equals("BLOCKED", ignoreCase = true))
+
+                    if (!hasFirestoreProfile) {
+                        // Wait for authoritative Firestore profile before reacting to potentially stale RTDB user_status
+                        return
+                    }
+
+                    // If Firestore explicitly shows ACTIVE / unblocked and RTDB is older or unstamped, heal stale RTDB instead of false-blocking
+                    if (!latestFirestoreBlocked && isBlockedEffective && rtdbUpdatedAt <= latestFirestoreUpdatedAt) {
+                        try {
+                            statusRef.setValue(
+                                mapOf<String, Any>(
+                                    "isBlocked" to false,
+                                    "blocked" to false,
+                                    "status" to "ACTIVE",
+                                    "blockReason" to "",
+                                    "isForceLoggedOut" to false,
+                                    "forceLogout" to false,
+                                    "updatedAt" to System.currentTimeMillis()
+                                )
+                            )
+                        } catch (_: Exception) {}
+                        return
+                    }
+
+                    val base = currentProfile ?: return
+                    if (isBlockedEffective || rtdbForceLogout) {
+                        val updated = base.copy(
+                            isBlocked = isBlockedEffective,
+                            isForceLoggedOut = rtdbForceLogout,
+                            blockReason = if (rtdbReason.isNotBlank()) rtdbReason else base.blockReason
+                        )
+                        emitUpdatedProfile(updated)
+                    } else {
+                        // RTDB indicates user is ACTIVE / unblocked
+                        if (base.isBlocked || base.isForceLoggedOut) {
+                            val updated = base.copy(
+                                isBlocked = false,
+                                isForceLoggedOut = false,
+                                blockReason = ""
+                            )
+                            emitUpdatedProfile(updated)
+                        }
+                    }
+                }
+                override fun onCancelled(error: com.google.firebase.database.DatabaseError) {}
+            }
+            statusRef.addValueEventListener(statusListener)
+            rtdbListeners.add(Pair(statusRef, statusListener))
         }
 
         awaitClose {
@@ -822,8 +1154,8 @@ object FirebaseService {
     fun areSameStudent(a: UserProfile, b: UserProfile): Boolean {
         val aEmail = a.email.trim().lowercase()
         val bEmail = b.email.trim().lowercase()
-        if (aEmail.isNotBlank() && bEmail.isNotBlank() && aEmail.contains("@") && bEmail.contains("@") && aEmail == bEmail) {
-            return true
+        if (aEmail.isNotBlank() && bEmail.isNotBlank() && aEmail.contains("@") && bEmail.contains("@")) {
+            return aEmail == bEmail
         }
 
         val aUid = a.uid.trim()
@@ -834,25 +1166,30 @@ object FirebaseService {
             return true
         }
 
+        // Sanitized email matching UID (e.g. UID="karthik_kcet2026_gmail_com" and Email="karthik.kcet2026@gmail.com")
+        val aSanitizedEmail = aEmail.replace(".", "_").replace("@", "_")
+        val bSanitizedEmail = bEmail.replace(".", "_").replace("@", "_")
+        if (aEmail.isNotBlank() && aSanitizedEmail.isNotBlank() && aSanitizedEmail.equals(bUid, ignoreCase = true)) return true
+        if (bEmail.isNotBlank() && bSanitizedEmail.isNotBlank() && bSanitizedEmail.equals(aUid, ignoreCase = true)) return true
+
         val aStudentId = a.formattedStudentId.trim().lowercase()
         val bStudentId = b.formattedStudentId.trim().lowercase()
         if (aStudentId.isNotBlank() && bStudentId.isNotBlank() && aStudentId == bStudentId) {
             return true
         }
 
-        val aName = a.name.trim().lowercase()
-        val bName = b.name.trim().lowercase()
-        val isGenericA = aName.isBlank() || aName == "student" || aName == "guest" || aName == "guest student" || aName == "kcet aspirant" || aName == "user"
-        val isGenericB = bName.isBlank() || bName == "student" || bName == "guest" || bName == "guest student" || bName == "kcet aspirant" || bName == "user"
-        if (!isGenericA && !isGenericB && aName == bName) {
-            return true
+        // Only fall back to name matching if at least one side lacks a real UID/email (e.g. legacy test/receipt entry)
+        val aHasIdentity = (aEmail.isNotBlank() && aEmail.contains("@")) || !aIsSyntheticUid
+        val bHasIdentity = (bEmail.isNotBlank() && bEmail.contains("@")) || !bIsSyntheticUid
+        if (!(aHasIdentity && bHasIdentity)) {
+            val aName = a.name.trim().lowercase()
+            val bName = b.name.trim().lowercase()
+            val isGenericA = aName.isBlank() || aName == "student" || aName == "guest" || aName == "guest student" || aName == "kcet aspirant" || aName == "user"
+            val isGenericB = bName.isBlank() || bName == "student" || bName == "guest" || bName == "guest student" || bName == "kcet aspirant" || bName == "user"
+            if (!isGenericA && !isGenericB && aName == bName) {
+                return true
+            }
         }
-
-        // Sanitized email matching UID (e.g. UID="karthik_kcet2026_gmail_com" and Email="karthik.kcet2026@gmail.com")
-        val aSanitizedEmail = aEmail.replace(".", "_").replace("@", "_")
-        val bSanitizedEmail = bEmail.replace(".", "_").replace("@", "_")
-        if (aEmail.isNotBlank() && aSanitizedEmail.isNotBlank() && aSanitizedEmail.equals(bUid, ignoreCase = true)) return true
-        if (bEmail.isNotBlank() && bSanitizedEmail.isNotBlank() && bSanitizedEmail.equals(aUid, ignoreCase = true)) return true
 
         return false
     }
@@ -901,9 +1238,18 @@ object FirebaseService {
                 null -> cluster.any { it.isPremium }
             }
 
-            val isBlocked = cluster.any { it.isBlocked }
-            val isForceLoggedOut = cluster.any { it.isForceLoggedOut }
-            val blockReason = cluster.firstOrNull { it.blockReason.isNotBlank() }?.blockReason ?: bestProfile.blockReason
+            // Use the most recently updated authoritative record rather than allowing stale docs to poison block status
+            val authoritativeProfile = cluster
+                .filter { it.lastUpdatedMillis > 0L }
+                .maxByOrNull { it.lastUpdatedMillis }
+                ?: bestProfile
+            val isBlocked = authoritativeProfile.isBlocked
+            val isForceLoggedOut = authoritativeProfile.isForceLoggedOut
+            val blockReason = if (isBlocked) {
+                authoritativeProfile.blockReason.ifBlank {
+                    cluster.firstOrNull { it.blockReason.isNotBlank() }?.blockReason ?: ""
+                }
+            } else ""
             val maxLastUpdated = cluster.maxOfOrNull { it.lastUpdatedMillis } ?: bestProfile.lastUpdatedMillis
 
             val canonicalPassword = cluster.firstOrNull { it.password.isNotBlank() }?.password ?: bestProfile.password
@@ -982,9 +1328,10 @@ object FirebaseService {
             val kcetTargetRank = doc.getString("kcetTargetRank") ?: "Under 1000"
             val targetStream = doc.getString("targetStream") ?: "Engineering (B.E / B.Tech)"
             val registrationDate = doc.getString("registrationDate") ?: "2026"
-            val isForceLoggedOut = doc.getBoolean("isForceLoggedOut") ?: false
-            val isBlocked = doc.getBoolean("isBlocked") ?: false
-            val blockReason = doc.getString("blockReason") ?: ""
+            val status = (doc.getString("status") ?: "").trim()
+            val isForceLoggedOut = if (status.equals("ACTIVE", ignoreCase = true)) false else (extractBoolean(doc, "isForceLoggedOut", "forceLogout") == true)
+            val isBlocked = if (status.equals("ACTIVE", ignoreCase = true)) false else (extractBoolean(doc, "isBlocked", "blocked") == true || status.equals("BLOCKED", ignoreCase = true))
+            val blockReason = if (isBlocked) (doc.getString("blockReason") ?: doc.getString("reason") ?: "") else ""
             val signInMethod = extractSignInMethod(doc)
             val studentId = doc.getString("studentId") ?: doc.getString("formattedStudentId") ?: ""
             val lastUpdatedMillis = doc.getLong("lastUpdatedMillis") ?: 0L
@@ -1074,15 +1421,15 @@ object FirebaseService {
                         else -> false
                     }
 
-                    val isAnyBlocked = list.any { it.isBlocked }
-                    val isAnyLoggedOut = list.any { it.isForceLoggedOut }
-                    val blockReason = list.firstOrNull { it.blockReason.isNotBlank() }?.blockReason ?: primary.blockReason
+                    val isAnyBlocked = primary.isBlocked
+                    val isAnyLoggedOut = primary.isForceLoggedOut
+                    val blockReason = if (isAnyBlocked) (list.firstOrNull { it.blockReason.isNotBlank() }?.blockReason ?: primary.blockReason) else ""
 
                     primary.copy(
                         isPremium = isAnyPremium,
                         isBlocked = isAnyBlocked,
                         isForceLoggedOut = isAnyLoggedOut,
-                        blockReason = if (isAnyBlocked) blockReason else primary.blockReason
+                        blockReason = blockReason
                     )
                 }
 
@@ -1147,6 +1494,51 @@ object FirebaseService {
         }
     }
 
+    suspend fun isEmailVerifiedInFirestore(identifierOrUid: String): Boolean {
+        if (identifierOrUid.isBlank()) return true
+        val clean = normalizeIdentifier(identifierOrUid)
+        return try {
+            val userDoc = firestore.collection("users").document(identifierOrUid).get().awaitResult().getOrNull()
+            if (userDoc != null && userDoc.exists() && (userDoc.getBoolean("emailVerified") == true || userDoc.getString("emailVerified")?.equals("true", ignoreCase = true) == true)) return true
+
+            val emailDocId = clean.replace(".", "_").replace("@", "_")
+            if (emailDocId != identifierOrUid) {
+                val emailDoc = firestore.collection("users").document(emailDocId).get().awaitResult().getOrNull()
+                if (emailDoc != null && emailDoc.exists() && (emailDoc.getBoolean("emailVerified") == true || emailDoc.getString("emailVerified")?.equals("true", ignoreCase = true) == true)) return true
+            }
+
+            val accDoc = firestore.collection("user_accounts").document(clean).get().awaitResult().getOrNull()
+            if (accDoc != null && accDoc.exists()) {
+                val isVerified = accDoc.getBoolean("emailVerified") == true ||
+                    accDoc.getString("emailVerified")?.equals("true", ignoreCase = true) == true
+                if (isVerified) return true
+            }
+            false
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun clearStaleRtdbBlockStatus(vararg rawKeys: String) {
+        val statusMap = mapOf<String, Any>(
+            "isBlocked" to false,
+            "blocked" to false,
+            "status" to "ACTIVE",
+            "blockReason" to "",
+            "isForceLoggedOut" to false,
+            "forceLogout" to false,
+            "updatedAt" to System.currentTimeMillis()
+        )
+        rawKeys.map { it.trim().replace(".", "_").replace("@", "_") }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .forEach { safeKey ->
+                try {
+                    realtimeDb.getReference("user_status").child(safeKey).setValue(statusMap)
+                } catch (_: Exception) {}
+            }
+    }
+
     suspend fun checkIfUserIsBlocked(identifierOrUid: String): Pair<Boolean, String> {
         if (identifierOrUid.isBlank()) return Pair(false, "")
         val clean = normalizeIdentifier(identifierOrUid)
@@ -1154,41 +1546,76 @@ object FirebaseService {
             return Pair(false, "")
         }
         try {
+            val emailDocId = clean.replace(".", "_").replace("@", "_")
+            val docs = mutableListOf<com.google.firebase.firestore.DocumentSnapshot>()
+
             // 1. Direct UID check in users collection
             val directDoc = firestore.collection("users").document(identifierOrUid).get().awaitResult().getOrNull()
-            if (directDoc != null && directDoc.exists()) {
-                val isBlocked = directDoc.getBoolean("isBlocked") ?: false
-                val reason = directDoc.getString("blockReason") ?: ""
-                if (isBlocked) return Pair(true, reason)
+            if (directDoc != null && directDoc.exists()) docs.add(directDoc)
+
+            // 2. Normalized user_accounts document
+            val accDoc = firestore.collection("user_accounts").document(clean).get().awaitResult().getOrNull()
+            if (accDoc != null && accDoc.exists()) docs.add(accDoc)
+
+            // 3. Linked UID from user_accounts
+            val linkedUid = accDoc?.getString("uid")?.takeIf { it.isNotBlank() && it != identifierOrUid }
+            if (linkedUid != null) {
+                val linkedDoc = firestore.collection("users").document(linkedUid).get().awaitResult().getOrNull()
+                if (linkedDoc != null && linkedDoc.exists()) docs.add(linkedDoc)
             }
 
-            // 2. Normalize and check user_accounts collection
-            val cleanId = normalizeIdentifier(identifierOrUid)
-            val accDoc = firestore.collection("user_accounts").document(cleanId).get().awaitResult().getOrNull()
-            if (accDoc != null && accDoc.exists()) {
-                val uid = accDoc.getString("uid")
-                if (!uid.isNullOrBlank()) {
-                    val userDoc = firestore.collection("users").document(uid).get().awaitResult().getOrNull()
-                    if (userDoc != null && userDoc.exists()) {
-                        val isBlocked = userDoc.getBoolean("isBlocked") ?: false
-                        val reason = userDoc.getString("blockReason") ?: ""
-                        if (isBlocked) return Pair(true, reason)
+            // 4. Sanitized email doc ID + email query in users collection
+            val discoveredEmail = (accDoc?.getString("email")
+                ?: directDoc?.getString("email")
+                ?: if (clean.contains("@")) clean else "").lowercase().trim()
+            val discoveredEmailDocId = discoveredEmail.replace(".", "_").replace("@", "_")
+
+            if (emailDocId.isNotBlank() && emailDocId != identifierOrUid) {
+                val emailDoc = firestore.collection("users").document(emailDocId).get().awaitResult().getOrNull()
+                if (emailDoc != null && emailDoc.exists()) docs.add(emailDoc)
+            }
+            if (discoveredEmail.isNotBlank() && discoveredEmail.contains("@")) {
+                val queryRes = firestore.collection("users").whereEqualTo("email", discoveredEmail).get().awaitResult().getOrNull()
+                queryRes?.documents?.filter { it.exists() }?.let { docs.addAll(it) }
+            }
+
+            if (docs.isNotEmpty()) {
+                val authoritativeDoc = docs.maxByOrNull { it.getLong("lastUpdatedMillis") ?: 0L } ?: docs.first()
+                val status = (authoritativeDoc.getString("status") ?: "").trim()
+                val isBlocked = if (status.equals("ACTIVE", ignoreCase = true)) false else (
+                    extractBoolean(authoritativeDoc, "isBlocked", "blocked") == true ||
+                    status.equals("BLOCKED", ignoreCase = true)
+                )
+                val reason = (authoritativeDoc.getString("blockReason") ?: authoritativeDoc.getString("reason") ?: "")
+                if (isBlocked) {
+                    return Pair(true, reason.ifBlank { "Account blocked by Administrator." })
+                } else {
+                    clearStaleRtdbBlockStatus(identifierOrUid, clean, emailDocId, discoveredEmail, discoveredEmailDocId, linkedUid ?: "")
+                    return Pair(false, "")
+                }
+            }
+
+            // 5. RTDB user_status fallback check (only if no Firestore docs exist)
+            try {
+                val cleanKey = identifierOrUid.replace(".", "_").replace("@", "_")
+                val rtdbSnap = realtimeDb.getReference("user_status").child(cleanKey).get().awaitResult().getOrNull()
+                if (rtdbSnap != null && rtdbSnap.exists()) {
+                    val rtdbStatus = (rtdbSnap.child("status").getValue(String::class.java) ?: "").trim()
+                    val rtdbBlocked = if (rtdbStatus.equals("ACTIVE", ignoreCase = true)) false else (
+                        (rtdbSnap.child("isBlocked").getValue(Boolean::class.java)
+                            ?: rtdbSnap.child("blocked").getValue(Boolean::class.java)
+                            ?: false) ||
+                            rtdbStatus.equals("BLOCKED", ignoreCase = true)
+                    )
+                    val rtdbReason = rtdbSnap.child("blockReason").getValue(String::class.java)
+                        ?: rtdbSnap.child("reason").getValue(String::class.java) ?: ""
+                    if (rtdbBlocked) {
+                        return Pair(true, rtdbReason.ifBlank { "Account blocked by Administrator." })
                     }
                 }
-            }
+            } catch (_: Exception) {}
 
-            // 3. Check users collection by email query
-            if (identifierOrUid.contains("@")) {
-                val queryRes = firestore.collection("users").whereEqualTo("email", identifierOrUid.lowercase().trim()).limit(1).get().awaitResult().getOrNull()
-                if (queryRes != null && !queryRes.isEmpty) {
-                    val doc = queryRes.documents.first()
-                    val isBlocked = doc.getBoolean("isBlocked") ?: false
-                    val reason = doc.getString("blockReason") ?: ""
-                    if (isBlocked) return Pair(true, reason)
-                }
-            }
-
-            // 4. Check sample default students in memory
+            // 6. Check sample default students in memory
             val sampleStudent = SampleData.defaultStudents.find { it.uid == identifierOrUid || it.email.equals(identifierOrUid, ignoreCase = true) }
             if (sampleStudent?.isBlocked == true) {
                 return Pair(true, sampleStudent.blockReason)
@@ -1197,6 +1624,60 @@ object FirebaseService {
             Log.e(TAG, "Error checking user block status: ${e.message}")
         }
         return Pair(false, "")
+    }
+
+    suspend fun updateStudentBlockStatus(identifier: String, isBlocked: Boolean, reason: String = ""): Boolean {
+        if (identifier.isBlank()) return false
+        val cleanId = normalizeIdentifier(identifier)
+        val emailDocId = cleanId.replace(".", "_").replace("@", "_")
+        val safeReason = if (isBlocked) reason.ifBlank { "Account blocked by Administrator." } else ""
+        val updateMap = mapOf(
+            "isBlocked" to isBlocked,
+            "blocked" to isBlocked,
+            "status" to (if (isBlocked) "BLOCKED" else "ACTIVE"),
+            "blockReason" to safeReason,
+            "isForceLoggedOut" to isBlocked,
+            "forceLogout" to isBlocked,
+            "lastUpdatedMillis" to System.currentTimeMillis()
+        )
+
+        try {
+            firestore.collection("users").document(identifier).set(updateMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+            if (emailDocId != identifier) {
+                firestore.collection("users").document(emailDocId).set(updateMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+            }
+            if (cleanId.contains("@")) {
+                firestore.collection("user_accounts").document(cleanId).set(updateMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+                val qSnap = firestore.collection("users").whereEqualTo("email", cleanId).get().awaitResult().getOrNull()
+                qSnap?.documents?.forEach { doc ->
+                    doc.reference.set(updateMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+                }
+            }
+            // RTDB fast-path push to user_status
+            try {
+                val rtdb = realtimeDb
+                val safeKey = identifier.replace(".", "_").replace("@", "_")
+                val statusMap = mapOf<String, Any>(
+                    "isBlocked" to isBlocked,
+                    "blocked" to isBlocked,
+                    "status" to (if (isBlocked) "BLOCKED" else "ACTIVE"),
+                    "blockReason" to safeReason,
+                    "isForceLoggedOut" to isBlocked,
+                    "forceLogout" to isBlocked,
+                    "updatedAt" to System.currentTimeMillis()
+                )
+                rtdb.getReference("user_status").child(safeKey).setValue(statusMap)
+                if (emailDocId != safeKey) {
+                    rtdb.getReference("user_status").child(emailDocId).setValue(statusMap)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "RTDB user_status push error: ${e.message}")
+            }
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error updating block status: ${e.message}")
+            return false
+        }
     }
 
     suspend fun forceLogoutStudent(identifier: String): Boolean {
@@ -1209,15 +1690,39 @@ object FirebaseService {
             val cleanId = normalizeIdentifier(identifier)
             val emailDocId = cleanId.replace(".", "_").replace("@", "_")
 
-            firestore.collection("users").document(identifier).update("isForceLoggedOut", true).awaitResult()
+            val updateMap = mapOf(
+                "isForceLoggedOut" to true,
+                "forceLogout" to true,
+                "lastUpdatedMillis" to System.currentTimeMillis()
+            )
+
+            firestore.collection("users").document(identifier).set(updateMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
             if (emailDocId != identifier) {
-                firestore.collection("users").document(emailDocId).update("isForceLoggedOut", true).awaitResult()
+                firestore.collection("users").document(emailDocId).set(updateMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
             }
             if (cleanId.contains("@")) {
+                firestore.collection("user_accounts").document(cleanId).set(updateMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
                 val querySnap = firestore.collection("users").whereEqualTo("email", cleanId).get().awaitResult().getOrNull()
                 querySnap?.documents?.forEach { doc ->
-                    firestore.collection("users").document(doc.id).update("isForceLoggedOut", true).awaitResult()
+                    firestore.collection("users").document(doc.id).set(updateMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
                 }
+            }
+
+            // RTDB fast-path push to user_status
+            try {
+                val rtdb = realtimeDb
+                val safeKey = identifier.replace(".", "_").replace("@", "_")
+                val statusMap = mapOf<String, Any>(
+                    "isForceLoggedOut" to true,
+                    "forceLogout" to true,
+                    "updatedAt" to System.currentTimeMillis()
+                )
+                rtdb.getReference("user_status").child(safeKey).updateChildren(statusMap)
+                if (emailDocId != safeKey) {
+                    rtdb.getReference("user_status").child(emailDocId).updateChildren(statusMap)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "RTDB forceLogout push error: ${e.message}")
             }
             true
         } catch (e: Exception) {
@@ -1406,10 +1911,128 @@ object FirebaseService {
         }
     }
 
-    suspend fun clearForceLogoutFlag(uid: String): Boolean {
-        if (uid.isBlank()) return false
-        val res = firestore.collection("users").document(uid).update("isForceLoggedOut", false).awaitResult()
-        return res.isSuccess
+    suspend fun unblockStudent(identifier: String, email: String = ""): Boolean {
+        if (identifier.isBlank() && email.isBlank()) return false
+        val cleanId = normalizeIdentifier(identifier)
+        val cleanEmail = (if (email.isNotBlank()) email else if (identifier.contains("@")) identifier else "").lowercase().trim()
+        val emailDocId = cleanEmail.replace(".", "_").replace("@", "_")
+        val now = System.currentTimeMillis()
+
+        val unblockData = mapOf<String, Any>(
+            "isBlocked" to false,
+            "blocked" to false,
+            "status" to "ACTIVE",
+            "blockReason" to "",
+            "isForceLoggedOut" to false,
+            "forceLogout" to false,
+            "lastUpdatedMillis" to now
+        )
+
+        try {
+            if (identifier.isNotBlank()) {
+                firestore.collection("users").document(identifier).set(unblockData, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+            }
+            if (emailDocId.isNotBlank() && emailDocId != identifier) {
+                firestore.collection("users").document(emailDocId).set(unblockData, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+            }
+            if (cleanEmail.isNotBlank()) {
+                firestore.collection("user_accounts").document(cleanEmail).set(unblockData, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+                val qSnap = firestore.collection("users").whereEqualTo("email", cleanEmail).get().awaitResult().getOrNull()
+                qSnap?.documents?.forEach { doc ->
+                    try { doc.reference.set(unblockData, com.google.firebase.firestore.SetOptions.merge()).awaitResult() } catch (_: Exception) {}
+                }
+            }
+            if (cleanId.isNotBlank() && cleanId.contains("@") && cleanId != cleanEmail) {
+                firestore.collection("user_accounts").document(cleanId).set(unblockData, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+            }
+            if (identifier.isNotBlank()) {
+                val qSnapUid = firestore.collection("users").whereEqualTo("uid", identifier).get().awaitResult().getOrNull()
+                qSnapUid?.documents?.forEach { doc ->
+                    try { doc.reference.set(unblockData, com.google.firebase.firestore.SetOptions.merge()).awaitResult() } catch (_: Exception) {}
+                }
+            }
+
+            // Realtime Database status clear
+            val rtdb = realtimeDb
+            val statusMap = mapOf<String, Any>(
+                "isBlocked" to false,
+                "blocked" to false,
+                "status" to "ACTIVE",
+                "blockReason" to "",
+                "isForceLoggedOut" to false,
+                "forceLogout" to false,
+                "updatedAt" to now
+            )
+            val safeKey = identifier.replace(".", "_").replace("@", "_")
+            if (safeKey.isNotBlank()) {
+                try { rtdb.getReference("user_status").child(safeKey).setValue(statusMap) } catch (_: Exception) {}
+            }
+            if (emailDocId.isNotBlank() && emailDocId != safeKey) {
+                try { rtdb.getReference("user_status").child(emailDocId).setValue(statusMap) } catch (_: Exception) {}
+            }
+            if (cleanEmail.isNotBlank()) {
+                val safeEmailKey = cleanEmail.replace(".", "_").replace("@", "_")
+                try { rtdb.getReference("user_status").child(safeEmailKey).setValue(statusMap) } catch (_: Exception) {}
+            }
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error unblocking student: ${e.message}")
+            return false
+        }
+    }
+
+    suspend fun clearForceLogoutFlag(identifier: String, email: String = ""): Boolean {
+        if (identifier.isBlank() && email.isBlank()) return false
+        val cleanId = normalizeIdentifier(identifier)
+        val cleanEmail = (if (email.isNotBlank()) email else if (identifier.contains("@")) identifier else "").lowercase().trim()
+        val emailDocId = cleanEmail.replace(".", "_").replace("@", "_")
+        val now = System.currentTimeMillis()
+
+        val clearMap = mapOf<String, Any>(
+            "isForceLoggedOut" to false,
+            "forceLogout" to false,
+            "lastUpdatedMillis" to now
+        )
+
+        try {
+            if (identifier.isNotBlank()) {
+                firestore.collection("users").document(identifier).set(clearMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+            }
+            if (emailDocId.isNotBlank() && emailDocId != identifier) {
+                firestore.collection("users").document(emailDocId).set(clearMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+            }
+            if (cleanEmail.isNotBlank()) {
+                firestore.collection("user_accounts").document(cleanEmail).set(clearMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+                val qSnap = firestore.collection("users").whereEqualTo("email", cleanEmail).get().awaitResult().getOrNull()
+                qSnap?.documents?.forEach { doc ->
+                    try { doc.reference.set(clearMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult() } catch (_: Exception) {}
+                }
+            }
+            if (cleanId.isNotBlank() && cleanId.contains("@") && cleanId != cleanEmail) {
+                firestore.collection("user_accounts").document(cleanId).set(clearMap, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+            }
+
+            // RTDB clear
+            val rtdb = realtimeDb
+            val safeKey = identifier.replace(".", "_").replace("@", "_")
+            val statusUpdate = mapOf<String, Any>(
+                "isForceLoggedOut" to false,
+                "forceLogout" to false
+            )
+            if (safeKey.isNotBlank()) {
+                try { rtdb.getReference("user_status").child(safeKey).updateChildren(statusUpdate) } catch (_: Exception) {}
+            }
+            if (emailDocId.isNotBlank() && emailDocId != safeKey) {
+                try { rtdb.getReference("user_status").child(emailDocId).updateChildren(statusUpdate) } catch (_: Exception) {}
+            }
+            if (cleanEmail.isNotBlank()) {
+                val safeEmailKey = cleanEmail.replace(".", "_").replace("@", "_")
+                try { rtdb.getReference("user_status").child(safeEmailKey).updateChildren(statusUpdate) } catch (_: Exception) {}
+            }
+            return true
+        } catch (e: Exception) {
+            return false
+        }
     }
 
     suspend fun clearDeletedStudent(email: String = "", uid: String = "") {
@@ -2005,7 +2628,10 @@ object FirebaseService {
         val currentUid = auth.currentUser?.uid ?: ""
         val currentEmail = auth.currentUser?.email?.trim()?.lowercase() ?: ""
         val leaderboardMap = mutableMapOf<String, LeaderboardEntry>()
+        val leaderboardTimestamps = mutableMapOf<String, Long>()
         val userEntries = mutableMapOf<String, LeaderboardEntry>()
+        val userEntryTimestamps = mutableMapOf<String, Long>()
+        var activeLeaderboardResetAt = 0L
 
         val mentorEmails = mutableSetOf<String>()
         val mentorNames = mutableSetOf<String>()
@@ -2026,9 +2652,20 @@ object FirebaseService {
             // 2. User profile records
             // 3. Dedicated leaderboard records (contain latest synced XP)
             val allCandidates = mutableListOf<LeaderboardEntry>()
-            allCandidates.addAll(defaultRegisteredStudents)
-            allCandidates.addAll(userEntries.values)
-            allCandidates.addAll(leaderboardMap.values)
+            val effectiveDefaults = if (activeLeaderboardResetAt > 0L) {
+                defaultRegisteredStudents.map { it.copy(points = 0) }
+            } else {
+                defaultRegisteredStudents
+            }
+            allCandidates.addAll(effectiveDefaults)
+            userEntries.forEach { (key, entry) ->
+                val ts = userEntryTimestamps[key] ?: 0L
+                allCandidates.add(if (activeLeaderboardResetAt > 0L && ts <= activeLeaderboardResetAt) entry.copy(points = 0) else entry)
+            }
+            leaderboardMap.forEach { (key, entry) ->
+                val ts = leaderboardTimestamps[key] ?: 0L
+                allCandidates.add(if (activeLeaderboardResetAt > 0L && ts <= activeLeaderboardResetAt) entry.copy(points = 0) else entry)
+            }
 
             for (candidate in allCandidates) {
                 val emailLower = candidate.email.trim().lowercase()
@@ -2130,8 +2767,17 @@ object FirebaseService {
             trySend(list)
         }
 
+        val lbResetListener = firestore.collection("admin_config").document("leaderboard").addSnapshotListener { snapshot, _ ->
+            val ts = snapshot?.getLong("leaderboardResetAt") ?: 0L
+            if (ts != activeLeaderboardResetAt) {
+                activeLeaderboardResetAt = ts
+                emitCombined()
+            }
+        }
+
         val lbListener = firestore.collection("leaderboard").addSnapshotListener { snapshot, _ ->
             leaderboardMap.clear()
+            leaderboardTimestamps.clear()
             if (snapshot != null) {
                 for (doc in snapshot.documents) {
                     val uid = (doc.getString("uid") ?: doc.id).trim()
@@ -2139,6 +2785,7 @@ object FirebaseService {
                     val name = (doc.getString("name") ?: "Student").trim()
                     val docKey = uid.ifBlank { email.ifBlank { doc.id } }
                     val initials = doc.getString("avatarInitials") ?: if (name.length >= 2) name.substring(0, 2).uppercase() else "ST"
+                    val lastUpdated = doc.getLong("lastUpdatedMillis") ?: 0L
                     val entry = LeaderboardEntry(
                         rank = 0,
                         name = name,
@@ -2152,6 +2799,7 @@ object FirebaseService {
                         email = email
                     )
                     leaderboardMap[docKey] = entry
+                    leaderboardTimestamps[docKey] = lastUpdated
                 }
             }
             emitCombined()
@@ -2159,6 +2807,7 @@ object FirebaseService {
 
         val userListener = firestore.collection("users").addSnapshotListener { snapshot, _ ->
             userEntries.clear()
+            userEntryTimestamps.clear()
             if (snapshot != null) {
                 for (doc in snapshot.documents) {
                     val uid = (doc.getString("uid") ?: doc.id).trim()
@@ -2167,6 +2816,7 @@ object FirebaseService {
                     val pts = (doc.getLong("points") ?: 0L).toInt()
                     val acc = (doc.getDouble("accuracy") ?: 75.0).toFloat()
                     val tests = (doc.getLong("testsCount") ?: 1L).toInt()
+                    val lastUpdated = doc.getLong("lastUpdatedMillis") ?: 0L
 
                     // Skip orphaned update documents that only have doc.id = email and no password/registration
                     if (doc.id.contains("@") && doc.getString("password") == null && doc.getString("registrationDate") == null && pts == 0) {
@@ -2192,6 +2842,7 @@ object FirebaseService {
                         email = email
                     )
                     userEntries[docKey] = entry
+                    userEntryTimestamps[docKey] = lastUpdated
                 }
             }
             emitCombined()
@@ -2261,6 +2912,7 @@ object FirebaseService {
         }
 
         awaitClose {
+            lbResetListener.remove()
             delStudentListener.remove()
             lbListener.remove()
             userListener.remove()
@@ -2277,22 +2929,27 @@ object FirebaseService {
         var maxPoints = 0
 
         try {
+            val resetAt = getLeaderboardResetAtOnce()
             if (cleanUid.isNotBlank()) {
                 val lbDoc = firestore.collection("leaderboard").document(cleanUid).get().awaitResult().getOrNull()
-                val lbPoints = (lbDoc?.getLong("points") ?: 0L).toInt()
+                val lbUpdated = lbDoc?.getLong("lastUpdatedMillis") ?: 0L
+                val lbPoints = if (resetAt > 0L && lbUpdated <= resetAt) 0 else (lbDoc?.getLong("points") ?: 0L).toInt()
                 maxPoints = maxOf(maxPoints, lbPoints)
 
                 val userDoc = firestore.collection("users").document(cleanUid).get().awaitResult().getOrNull()
-                val uPoints = (userDoc?.getLong("points") ?: 0L).toInt()
+                val userUpdated = userDoc?.getLong("lastUpdatedMillis") ?: 0L
+                val uPoints = if (resetAt > 0L && userUpdated <= resetAt) 0 else (userDoc?.getLong("points") ?: 0L).toInt()
                 maxPoints = maxOf(maxPoints, uPoints)
             }
             if (cleanEmail.isNotBlank()) {
                 val lbDocEmail = firestore.collection("leaderboard").document(cleanEmail).get().awaitResult().getOrNull()
-                val lbEmailPoints = (lbDocEmail?.getLong("points") ?: 0L).toInt()
+                val lbEmailUpdated = lbDocEmail?.getLong("lastUpdatedMillis") ?: 0L
+                val lbEmailPoints = if (resetAt > 0L && lbEmailUpdated <= resetAt) 0 else (lbDocEmail?.getLong("points") ?: 0L).toInt()
                 maxPoints = maxOf(maxPoints, lbEmailPoints)
 
                 val userDocEmail = firestore.collection("users").document(cleanEmail).get().awaitResult().getOrNull()
-                val uEmailPoints = (userDocEmail?.getLong("points") ?: 0L).toInt()
+                val uEmailUpdated = userDocEmail?.getLong("lastUpdatedMillis") ?: 0L
+                val uEmailPoints = if (resetAt > 0L && uEmailUpdated <= resetAt) 0 else (userDocEmail?.getLong("points") ?: 0L).toInt()
                 maxPoints = maxOf(maxPoints, uEmailPoints)
             }
         } catch (e: Exception) {
@@ -2560,6 +3217,7 @@ object FirebaseService {
         }
         awaitClose { listener.remove() }
     }
+
 
     suspend fun saveNotification(notification: StudentNotification) {
         val id = notification.id.ifBlank { "notif_${System.currentTimeMillis()}" }
@@ -3936,5 +4594,364 @@ object FirebaseService {
     suspend fun toggleQuestionSet(setId: String, isActive: Boolean): Boolean {
         return ChallengeService.toggleQuestionSetStatus(setId, isActive).isSuccess
     }
+
+    // -------------------------------------------------------------
+    // SYSTEM SECURITY KEY, SYSTEM SHUTDOWN & LEADERBOARD XP RESET
+    // -------------------------------------------------------------
+    suspend fun ensureSystemSecurityKeySeeded() {
+        try {
+            val docRef = firestore.collection("admin_config").document("security")
+            val snapshot = withTimeoutOrNull(4500L) { docRef.get().awaitResult().getOrNull() }
+            val existingSecKey = snapshot?.getString("securityKey")?.trim()
+                ?: snapshot?.get("securityKey")?.toString()?.trim()
+            val existingPin = snapshot?.getString("pin")?.trim()
+                ?: snapshot?.get("pin")?.toString()?.trim()
+
+            if (snapshot == null || !snapshot.exists() || existingSecKey.isNullOrBlank()) {
+                val seedKey = if (!existingPin.isNullOrBlank()) existingPin else SystemControlConfig.DEFAULT_SYSTEM_SECURITY_KEY
+                val payload = mutableMapOf<String, Any>(
+                    "securityKey" to seedKey,
+                    "securityKeyUpdatedAtMillis" to System.currentTimeMillis()
+                )
+                if (existingPin.isNullOrBlank()) {
+                    payload["pin"] = seedKey
+                }
+                docRef.set(payload, com.google.firebase.firestore.SetOptions.merge()).awaitResult()
+                FirebaseRealtimeService.seedSystemSecurityKeyIfMissing(seedKey)
+            } else {
+                FirebaseRealtimeService.seedSystemSecurityKeyIfMissing(existingSecKey)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error ensuring system security key seeded: ${e.message}")
+        }
+    }
+
+    fun observeFirestoreSecurityKeySnapshot(): Flow<SystemControlConfig.RemoteSecurityKeySnapshot?> = callbackFlow {
+        val docRef = firestore.collection("admin_config").document("security")
+        val listener = docRef.addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null || !snapshot.exists()) {
+                trySend(null)
+                return@addSnapshotListener
+            }
+            val secKey = (snapshot.getString("securityKey")
+                ?: snapshot.get("securityKey")?.toString()
+                ?: snapshot.getString("security_key")
+                ?: snapshot.get("security_key")?.toString())?.trim()
+            val pin = (snapshot.getString("pin")
+                ?: snapshot.get("pin")?.toString()
+                ?: snapshot.getString("admin_pin")
+                ?: snapshot.get("admin_pin")?.toString())?.trim()
+            val updatedAt = snapshot.getLong("securityKeyUpdatedAtMillis")
+                ?: snapshot.getLong("updatedAtMillis")
+                ?: 0L
+            trySend(
+                SystemControlConfig.RemoteSecurityKeySnapshot(
+                    securityKey = secKey,
+                    pin = pin,
+                    updatedAtMillis = updatedAt
+                )
+            )
+        }
+        awaitClose { listener.remove() }
+    }
+
+    suspend fun getEffectiveSystemSecurityKeyOnce(fallbackCachedKey: String? = null): String {
+        val fsSnapshot = try {
+            withTimeoutOrNull(4500L) {
+                val snapshot = firestore.collection("admin_config").document("security").get().awaitResult().getOrNull()
+                if (snapshot != null && snapshot.exists()) {
+                    val secKey = (snapshot.getString("securityKey")
+                        ?: snapshot.get("securityKey")?.toString()
+                        ?: snapshot.getString("security_key")
+                        ?: snapshot.get("security_key")?.toString())?.trim()
+                    val pin = (snapshot.getString("pin")
+                        ?: snapshot.get("pin")?.toString()
+                        ?: snapshot.getString("admin_pin")
+                        ?: snapshot.get("admin_pin")?.toString())?.trim()
+                    val updatedAt = snapshot.getLong("securityKeyUpdatedAtMillis")
+                        ?: snapshot.getLong("updatedAtMillis")
+                        ?: 0L
+                    SystemControlConfig.RemoteSecurityKeySnapshot(
+                        securityKey = secKey,
+                        pin = pin,
+                        updatedAtMillis = updatedAt
+                    )
+                } else {
+                    null
+                }
+            }
+        } catch (_: Exception) {
+            null
+        }
+
+        val rtdbSnapshot = try {
+            FirebaseRealtimeService.getSystemSecurityKeyOnceFromRTDB()
+        } catch (_: Exception) {
+            null
+        }
+
+        if (fsSnapshot == null && rtdbSnapshot == null && !fallbackCachedKey.isNullOrBlank()) {
+            return fallbackCachedKey.trim()
+        }
+
+        return SystemControlConfig.resolveEffectiveSecurityKey(
+            firestoreSnapshot = fsSnapshot,
+            rtdbSecurityKey = rtdbSnapshot?.securityKey,
+            rtdbPin = rtdbSnapshot?.pin,
+            rtdbUpdatedAtMillis = rtdbSnapshot?.updatedAtMillis ?: 0L
+        )
+    }
+
+    fun observeSystemShutdownStatus(): Flow<SystemControlConfig.SystemShutdownStatus?> = callbackFlow {
+        val docRef = firestore.collection("admin_config").document("system_status")
+        val listener = docRef.addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null || !snapshot.exists()) {
+                trySend(null)
+                return@addSnapshotListener
+            }
+            val isShutdown = snapshot.getBoolean("isShutdown") ?: false
+            val updatedAt = snapshot.getLong("updatedAtMillis") ?: 0L
+            val updatedBy = snapshot.getString("updatedBy") ?: ""
+            trySend(
+                SystemControlConfig.SystemShutdownStatus(
+                    isShutdown = isShutdown,
+                    updatedAtMillis = updatedAt,
+                    updatedBy = updatedBy
+                )
+            )
+        }
+        awaitClose { listener.remove() }
+    }
+
+    suspend fun setSystemShutdownStatus(
+        isShutdown: Boolean,
+        updatedBy: String = "ullassuvarna65@gmail.com"
+    ): Boolean {
+        val now = System.currentTimeMillis()
+        var firestoreSuccess = false
+        try {
+            val docMap = mapOf(
+                "isShutdown" to isShutdown,
+                "updatedAtMillis" to now,
+                "updatedBy" to updatedBy
+            )
+            val res = firestore.collection("admin_config").document("system_status")
+                .set(docMap, com.google.firebase.firestore.SetOptions.merge())
+                .awaitResult()
+            firestoreSuccess = res.isSuccess
+        } catch (e: Exception) {
+            Log.e(TAG, "Error updating Firestore system shutdown status: ${e.message}")
+        }
+
+        try {
+            FirebaseRealtimeService.saveSystemShutdownToRTDB(
+                isShutdown = isShutdown,
+                updatedBy = updatedBy,
+                updatedAtMillis = now
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Error saving RTDB system shutdown status: ${e.message}")
+        }
+        return firestoreSuccess
+    }
+
+    fun observeLeaderboardResetAt(): Flow<Long> = callbackFlow {
+        val docRef = firestore.collection("admin_config").document("leaderboard")
+        val listener = docRef.addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null || !snapshot.exists()) {
+                trySend(0L)
+                return@addSnapshotListener
+            }
+            val ts = snapshot.getLong("leaderboardResetAt") ?: 0L
+            trySend(ts)
+        }
+        awaitClose { listener.remove() }
+    }
+
+    suspend fun getLeaderboardResetAtOnce(): Long {
+        var maxReset = 0L
+        try {
+            val doc = withTimeoutOrNull(3000L) {
+                firestore.collection("admin_config").document("leaderboard").get().awaitResult().getOrNull()
+            }
+            val fsTs = doc?.getLong("leaderboardResetAt") ?: 0L
+            if (fsTs > maxReset) maxReset = fsTs
+        } catch (_: Exception) {}
+        return maxReset
+    }
+
+    suspend fun resetAllStudentLeaderboardXp(): Boolean {
+        val resetTs = System.currentTimeMillis()
+        return try {
+            // 1. Publish global leaderboard reset timestamp so all clients zero cached XP immediately
+            val resetMeta = mapOf(
+                "leaderboardResetAt" to resetTs,
+                "updatedBy" to "ullassuvarna65@gmail.com"
+            )
+            firestore.collection("admin_config").document("leaderboard")
+                .set(resetMeta, com.google.firebase.firestore.SetOptions.merge())
+                .awaitResult()
+
+            // 2. Reset all documents in Firestore `leaderboard` collection to 0 XP
+            val lbSnapshot = firestore.collection("leaderboard").get().awaitResult().getOrNull()
+            if (lbSnapshot != null && !lbSnapshot.isEmpty) {
+                val updates = mapOf<String, Any>(
+                    "points" to 0,
+                    "xp" to 0,
+                    "rank" to 0,
+                    "lastUpdatedMillis" to resetTs
+                )
+                lbSnapshot.documents.chunked(400).forEach { chunk ->
+                    val batch = firestore.batch()
+                    chunk.forEach { doc ->
+                        batch.set(doc.reference, updates, com.google.firebase.firestore.SetOptions.merge())
+                    }
+                    batch.commit().awaitResult()
+                }
+            }
+
+            // 3. Reset points & xp to 0 for all student documents in Firestore `users` collection
+            val usersSnapshot = firestore.collection("users").get().awaitResult().getOrNull()
+            if (usersSnapshot != null && !usersSnapshot.isEmpty) {
+                val userUpdates = mapOf<String, Any>(
+                    "points" to 0,
+                    "xp" to 0,
+                    "lastUpdatedMillis" to resetTs
+                )
+                val studentDocs = usersSnapshot.documents.filter { doc ->
+                    val email = doc.getString("email")?.trim()?.lowercase() ?: ""
+                    doc.id != "admin_ullas" &&
+                        doc.id != "mentor_ullas_85" &&
+                        email != "ullassuvarna65@gmail.com" &&
+                        email != "ullassuvarna85@gmail.com"
+                }
+                studentDocs.chunked(400).forEach { chunk ->
+                    val batch = firestore.batch()
+                    chunk.forEach { doc ->
+                        batch.set(doc.reference, userUpdates, com.google.firebase.firestore.SetOptions.merge())
+                    }
+                    batch.commit().awaitResult()
+                }
+            }
+
+            // 4. Reset RTDB leaderboard & liveXP nodes and store leaderboardResetAt
+            FirebaseRealtimeService.resetAllLeaderboardXpInRTDB(resetTs)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error resetting all student leaderboard XP: ${e.message}", e)
+            false
+        }
+    }
+
+    // -------------------------------------------------------------
+    // APP-WIDE MAINTENANCE MODE CONFIGURATION (Firestore + RTDB)
+    // -------------------------------------------------------------
+    private fun parseMaintenanceDocument(doc: com.google.firebase.firestore.DocumentSnapshot): MaintenanceConfig {
+        val enabled = extractBoolean(doc, "maintenanceEnabled") ?: false
+        val startTime = (doc.get("maintenanceStartTime") as? Number)?.toLong()
+            ?: doc.get("maintenanceStartTime")?.toString()?.toLongOrNull()
+            ?: 0L
+        val endTime = (doc.get("maintenanceEndTime") as? Number)?.toLong()
+            ?: doc.get("maintenanceEndTime")?.toString()?.toLongOrNull()
+            ?: 0L
+        val updatedAt = (doc.get("updatedAt") as? Number)?.toLong()
+            ?: doc.get("updatedAt")?.toString()?.toLongOrNull()
+            ?: 0L
+        val updatedBy = doc.getString("updatedBy").orEmpty()
+        return MaintenanceConfig(
+            maintenanceEnabled = enabled,
+            maintenanceStartTime = startTime,
+            maintenanceEndTime = endTime,
+            updatedAt = updatedAt,
+            updatedBy = updatedBy
+        )
+    }
+
+    fun observeMaintenanceConfig(): Flow<MaintenanceConfig?> = callbackFlow {
+        val docRef = firestore.collection("admin_config").document("maintenance")
+        val listener = docRef.addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null || !snapshot.exists()) {
+                trySend(null)
+                return@addSnapshotListener
+            }
+            trySend(parseMaintenanceDocument(snapshot))
+        }
+        awaitClose { listener.remove() }
+    }
+
+    suspend fun getMaintenanceConfigOnce(): MaintenanceConfig? {
+        return try {
+            val snapshot = withTimeoutOrNull(4500L) {
+                firestore.collection("admin_config").document("maintenance").get().awaitResult().getOrNull()
+            }
+            if (snapshot != null && snapshot.exists()) parseMaintenanceDocument(snapshot) else null
+        } catch (e: Exception) {
+            Log.w(TAG, "Error reading maintenance config: ${e.message}")
+            null
+        }
+    }
+
+    suspend fun saveMaintenanceConfig(
+        config: MaintenanceConfig,
+        callerIsAuthorizedAdmin: Boolean,
+        callerEmail: String
+    ): Result<MaintenanceConfig> {
+        val cleanCaller = callerEmail.trim().lowercase()
+        val firebaseUserEmail = auth.currentUser?.email?.trim()?.lowercase()
+        val isAuthorized = callerIsAuthorizedAdmin &&
+            (MaintenanceControlConfig.isAuthorizedAdminEmail(cleanCaller) ||
+                MaintenanceControlConfig.isAuthorizedAdminEmail(firebaseUserEmail))
+
+        if (!isAuthorized) {
+            return Result.failure(SecurityException("Unauthorized: Only an authorized Administrator can modify Maintenance Mode."))
+        }
+
+        if (config.maintenanceEnabled) {
+            if (config.maintenanceStartTime <= 0L || config.maintenanceEndTime <= config.maintenanceStartTime) {
+                return Result.failure(IllegalArgumentException("Invalid maintenance duration or end timestamp."))
+            }
+        }
+
+        val normalizedConfig = config.copy(
+            updatedBy = MaintenanceControlConfig.AUTHORIZED_ADMIN_EMAIL
+        )
+
+        val payload = mapOf<String, Any>(
+            "maintenanceEnabled" to normalizedConfig.maintenanceEnabled,
+            "maintenanceStartTime" to normalizedConfig.maintenanceStartTime,
+            "maintenanceEndTime" to normalizedConfig.maintenanceEndTime,
+            "updatedAt" to normalizedConfig.updatedAt,
+            "updatedBy" to normalizedConfig.updatedBy,
+            "serverUpdatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
+        )
+
+        var firestoreOk = false
+        var firestoreError: Throwable? = null
+        try {
+            val res = firestore.collection("admin_config")
+                .document("maintenance")
+                .set(payload, com.google.firebase.firestore.SetOptions.merge())
+                .awaitResult()
+            firestoreOk = res.isSuccess
+            firestoreError = res.exceptionOrNull()
+        } catch (e: Exception) {
+            firestoreError = e
+            Log.e(TAG, "Error saving maintenance config to Firestore: ${e.message}", e)
+        }
+
+        val rtdbOk = try {
+            FirebaseRealtimeService.saveMaintenanceConfigToRTDB(normalizedConfig)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error saving maintenance config to RTDB: ${e.message}")
+            false
+        }
+
+        return if (firestoreOk || rtdbOk) {
+            Result.success(normalizedConfig)
+        } else {
+            Result.failure(firestoreError ?: IllegalStateException("Failed to save maintenance configuration to Firebase."))
+        }
+    }
 }
+
 

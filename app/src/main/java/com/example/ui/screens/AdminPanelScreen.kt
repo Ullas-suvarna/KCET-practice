@@ -6,6 +6,12 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import com.example.viewmodel.EmailDeliveryUiState
+import com.example.viewmodel.AdminEmailNotificationUiState
+import com.example.data.AdminRegisteredStudent
+import com.example.data.MaintenanceConfig
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -145,9 +151,13 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
@@ -215,7 +225,17 @@ data class AdminPanelState(
     val adminChallenges: List<com.example.data.ChallengeData> = emptyList(),
     val challengeQuestionSets: List<com.example.data.ChallengeQuestionSet> = emptyList(),
     val liveChatPrice: Int = 50,
-    val subscriptionPrice: Int = 299
+    val subscriptionPrice: Int = 299,
+    val emailDeliveryState: EmailDeliveryUiState = EmailDeliveryUiState(),
+    val adminEmailState: AdminEmailNotificationUiState = AdminEmailNotificationUiState(),
+    val isSystemShutdown: Boolean = false,
+    val isResettingLeaderboard: Boolean = false,
+    val maintenanceConfig: MaintenanceConfig = MaintenanceConfig(),
+    val isMaintenanceActive: Boolean = false,
+    val maintenanceRemainingMillisFlow: StateFlow<Long>? = null,
+    val serverTimeOffsetMs: Long = 0L,
+    val isUpdatingMaintenance: Boolean = false,
+    val maintenanceFeedback: Pair<Boolean, String>? = null
 )
 
 data class AdminPanelActions(
@@ -267,6 +287,25 @@ data class AdminPanelActions(
     val onAdminVerified: () -> Unit = {},
     val onUpdateLiveChatPrice: (Int) -> Unit = {},
     val onUpdateSubscriptionPrice: (Int) -> Unit = {},
+    val onFetchEmailDeliverySettings: () -> Unit = {},
+    val onToggleEmailJs: (Boolean) -> Unit = {},
+    val onToggleCustomVerificationEmail: (Boolean) -> Unit = {},
+    val onClearEmailDeliveryFeedback: () -> Unit = {},
+    val onLoadAdminEmailStudents: (Boolean) -> Unit = {},
+    val onUpdateAdminEmailStudentSearch: (String) -> Unit = {},
+    val onSelectStudentForAdminEmail: (AdminRegisteredStudent?) -> Unit = {},
+    val onUpdateAdminEmailSubject: (String) -> Unit = {},
+    val onUpdateAdminEmailMessage: (String) -> Unit = {},
+    val onSendAdminStudentEmail: () -> Unit = {},
+    val onLoadAdminEmailLogs: (Boolean) -> Unit = {},
+    val onClearAdminEmailSendFeedback: () -> Unit = {},
+    val onResetLeaderboard: () -> Unit = {},
+    val onVerifySystemSecurityKey: suspend (String) -> Boolean = { false },
+    val onToggleSystemShutdown: (Boolean) -> Unit = {},
+    val onActivateMaintenance: (Int, Int) -> Unit = { _, _ -> },
+    val onExtendMaintenance: (Int, Int, Boolean) -> Unit = { _, _, _ -> },
+    val onDisableMaintenance: () -> Unit = {},
+    val onClearMaintenanceFeedback: () -> Unit = {},
     val onBack: () -> Unit = {}
 )
 
@@ -295,6 +334,16 @@ class AdminScreenScope(
     val challengeQuestionSets get() = state.challengeQuestionSets
     val liveChatPrice get() = state.liveChatPrice
     val subscriptionPrice get() = state.subscriptionPrice
+    val emailDeliveryState get() = state.emailDeliveryState
+    val adminEmailState get() = state.adminEmailState
+    val isSystemShutdown get() = state.isSystemShutdown
+    val isResettingLeaderboard get() = state.isResettingLeaderboard
+    val maintenanceConfig get() = state.maintenanceConfig
+    val isMaintenanceActive get() = state.isMaintenanceActive
+    val maintenanceRemainingMillisFlow get() = state.maintenanceRemainingMillisFlow
+    val serverTimeOffsetMs get() = state.serverTimeOffsetMs
+    val isUpdatingMaintenance get() = state.isUpdatingMaintenance
+    val maintenanceFeedback get() = state.maintenanceFeedback
 
     val onAddQuestion get() = actions.onAddQuestion
     val onGenerate180QuestionsForSet get() = actions.onGenerate180QuestionsForSet
@@ -344,6 +393,25 @@ class AdminScreenScope(
     val onAdminVerified get() = actions.onAdminVerified
     val onUpdateLiveChatPrice get() = actions.onUpdateLiveChatPrice
     val onUpdateSubscriptionPrice get() = actions.onUpdateSubscriptionPrice
+    val onFetchEmailDeliverySettings get() = actions.onFetchEmailDeliverySettings
+    val onToggleEmailJs get() = actions.onToggleEmailJs
+    val onToggleCustomVerificationEmail get() = actions.onToggleCustomVerificationEmail
+    val onClearEmailDeliveryFeedback get() = actions.onClearEmailDeliveryFeedback
+    val onLoadAdminEmailStudents get() = actions.onLoadAdminEmailStudents
+    val onUpdateAdminEmailStudentSearch get() = actions.onUpdateAdminEmailStudentSearch
+    val onSelectStudentForAdminEmail get() = actions.onSelectStudentForAdminEmail
+    val onUpdateAdminEmailSubject get() = actions.onUpdateAdminEmailSubject
+    val onUpdateAdminEmailMessage get() = actions.onUpdateAdminEmailMessage
+    val onSendAdminStudentEmail get() = actions.onSendAdminStudentEmail
+    val onLoadAdminEmailLogs get() = actions.onLoadAdminEmailLogs
+    val onClearAdminEmailSendFeedback get() = actions.onClearAdminEmailSendFeedback
+    val onResetLeaderboard get() = actions.onResetLeaderboard
+    val onVerifySystemSecurityKey get() = actions.onVerifySystemSecurityKey
+    val onToggleSystemShutdown get() = actions.onToggleSystemShutdown
+    val onActivateMaintenance get() = actions.onActivateMaintenance
+    val onExtendMaintenance get() = actions.onExtendMaintenance
+    val onDisableMaintenance get() = actions.onDisableMaintenance
+    val onClearMaintenanceFeedback get() = actions.onClearMaintenanceFeedback
     val onBack get() = actions.onBack
 }
 
@@ -1133,6 +1201,16 @@ private fun AdminScreenScope.AdminPanelContent() {
     var notifyOnCollegeSave by remember { mutableStateOf(true) }
     var notifyOnCutoffSave by remember { mutableStateOf(true) }
 
+    // Leaderboard Reset & System Shutdown Dialog States
+    var showResetLeaderboardConfirmDialog by remember { mutableStateOf(false) }
+    var showShutdownConfirmDialog by remember { mutableStateOf(false) }
+    var pendingShutdownTargetState by remember { mutableStateOf(false) }
+    var showShutdownKeyDialog by remember { mutableStateOf(false) }
+    var shutdownKeyInput by remember { mutableStateOf("") }
+    var shutdownKeyVisible by remember { mutableStateOf(false) }
+    var isVerifyingShutdownKey by remember { mutableStateOf(false) }
+    var shutdownKeyError by remember { mutableStateOf<String?>(null) }
+
 
     Scaffold(
         topBar = {
@@ -1293,8 +1371,61 @@ private fun AdminScreenScope.AdminPanelContent() {
                     onClick = { selectedTab = 12 },
                     text = { Text("⚔️ 1v1 Challenges (${adminChallenges.size})", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Color(0xFFF43F5E)) }
                 )
+                val emailStatusTag = when (emailDeliveryState.settings?.customEmailEnabled) {
+                    true -> "ENABLED"
+                    false -> "DISABLED"
+                    null -> "CONFIG"
+                }
+                Tab(
+                    selected = selectedTab == 13,
+                    onClick = { selectedTab = 13 },
+                    modifier = Modifier.testTag("admin_tab_email_delivery"),
+                    text = {
+                        Text(
+                            text = "📧 Email Delivery ($emailStatusTag)",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = if (emailDeliveryState.settings?.customEmailEnabled == true) Color(0xFF34D399) else Color(0xFF38BDF8)
+                        )
+                    }
+                )
+                Tab(
+                    selected = selectedTab == 14,
+                    onClick = { selectedTab = 14 },
+                    modifier = Modifier.testTag("admin_tab_email_notifications"),
+                    text = {
+                        Text(
+                            text = "✉️ Email Students (${adminEmailState.emailLogs.size})",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = Color(0xFFA5B4FC)
+                        )
+                    }
+                )
+                Tab(
+                    selected = selectedTab == 15,
+                    onClick = { selectedTab = 15 },
+                    modifier = Modifier.testTag("admin_tab_maintenance"),
+                    text = {
+                        val isAlert = isMaintenanceActive || isSystemShutdown
+                        Text(
+                            text = when {
+                                isMaintenanceActive && isSystemShutdown -> "🛠️ Maintenance (ON / OFF)"
+                                isMaintenanceActive -> "🛠️ Maintenance (ON)"
+                                isSystemShutdown -> "🛠️ Maintenance (SHUTDOWN)"
+                                else -> "🛠️ Maintenance"
+                            },
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = when {
+                                isSystemShutdown -> Color(0xFFFCA5A5)
+                                isAlert -> Color(0xFFFBBF24)
+                                else -> Color(0xFF93C5FD)
+                            }
+                        )
+                    }
+                )
             }
-
 
             LazyColumn(
                 modifier = Modifier
@@ -4331,7 +4462,8 @@ private fun AdminScreenScope.AdminPanelContent() {
 
                         val matchesFilter = when (selectedStudentFilter) {
                             "PREMIUM" -> student.isPremium
-                            "BLOCKED" -> student.isBlocked || student.isForceLoggedOut
+                            "BLOCKED" -> student.isBlocked
+                            "LOGGED_OUT" -> !student.isBlocked && student.isForceLoggedOut
                             "UPDATED" -> allNotifications.any { notif ->
                                 notif.type == "STUDENT_UPDATE" &&
                                 (notif.targetUserId == student.uid ||
@@ -4536,7 +4668,12 @@ private fun AdminScreenScope.AdminPanelContent() {
                                     FilterChip(
                                         selected = selectedStudentFilter == "BLOCKED",
                                         onClick = { selectedStudentFilter = "BLOCKED" },
-                                        label = { Text("🚫 Blocked/Logged Out (${uniqueStudentsList.count { it.isBlocked || it.isForceLoggedOut }})") }
+                                        label = { Text("🚫 Blocked (${uniqueStudentsList.count { it.isBlocked }})") }
+                                    )
+                                    FilterChip(
+                                        selected = selectedStudentFilter == "LOGGED_OUT",
+                                        onClick = { selectedStudentFilter = "LOGGED_OUT" },
+                                        label = { Text("🚪 Logged Out (${uniqueStudentsList.count { !it.isBlocked && it.isForceLoggedOut }})") }
                                     )
                                 }
                             }
@@ -4697,14 +4834,33 @@ private fun AdminScreenScope.AdminPanelContent() {
 
                                             Surface(
                                                 shape = RoundedCornerShape(6.dp),
-                                                color = if (student.isBlocked) Color(0xFFFEE2E2) else Color(0xFFDCFCE7),
-                                                border = BorderStroke(1.dp, if (student.isBlocked) Color(0xFFEF4444) else Color(0xFF22C55E))
+                                                color = when {
+                                                    student.isBlocked -> Color(0xFFFEE2E2)
+                                                    student.isForceLoggedOut -> Color(0xFFFFEDD5)
+                                                    else -> Color(0xFFDCFCE7)
+                                                },
+                                                border = BorderStroke(
+                                                    1.dp,
+                                                    when {
+                                                        student.isBlocked -> Color(0xFFEF4444)
+                                                        student.isForceLoggedOut -> Color(0xFFF97316)
+                                                        else -> Color(0xFF22C55E)
+                                                    }
+                                                )
                                             ) {
                                                 Text(
-                                                    text = if (student.isBlocked) "🚫 BLOCKED" else "🟢 ACTIVE",
+                                                    text = when {
+                                                        student.isBlocked -> "🚫 BLOCKED"
+                                                        student.isForceLoggedOut -> "🚪 LOGGED OUT"
+                                                        else -> "🟢 ACTIVE"
+                                                    },
                                                     fontSize = 9.sp,
                                                     fontWeight = FontWeight.ExtraBold,
-                                                    color = if (student.isBlocked) Color(0xFF991B1B) else Color(0xFF166534),
+                                                    color = when {
+                                                        student.isBlocked -> Color(0xFF991B1B)
+                                                        student.isForceLoggedOut -> Color(0xFFC2410C)
+                                                        else -> Color(0xFF166534)
+                                                    },
                                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                                 )
                                             }
@@ -7408,6 +7564,65 @@ private fun AdminScreenScope.AdminPanelContent() {
                         )
                     }
                 }
+
+                if (selectedTab == 13) {
+                    item {
+                        EmailDeliverySettingsSection(
+                            uiState = emailDeliveryState,
+                            onRefresh = onFetchEmailDeliverySettings,
+                            onEnableEmailJs = { onToggleEmailJs(true) },
+                            onDisableEmailJs = { onToggleEmailJs(false) },
+                            onEnableCustomVerification = { onToggleCustomVerificationEmail(true) },
+                            onDisableCustomVerification = { onToggleCustomVerificationEmail(false) },
+                            onDismissFeedback = onClearEmailDeliveryFeedback
+                        )
+                    }
+                }
+
+                if (selectedTab == 14) {
+                    item {
+                        AdminEmailNotificationsSection(
+                            uiState = adminEmailState,
+                            onLoadStudents = onLoadAdminEmailStudents,
+                            onSearchQueryChange = onUpdateAdminEmailStudentSearch,
+                            onSelectStudent = onSelectStudentForAdminEmail,
+                            onSubjectChange = onUpdateAdminEmailSubject,
+                            onMessageChange = onUpdateAdminEmailMessage,
+                            onSendEmail = onSendAdminStudentEmail,
+                            onLoadEmailLogs = onLoadAdminEmailLogs,
+                            onDismissFeedback = onClearAdminEmailSendFeedback
+                        )
+                    }
+                }
+
+                if (selectedTab == 15) {
+                    item {
+                        val fallbackRemainingFlow = remember { MutableStateFlow(0L) }
+                        MaintenanceAdminSection(
+                            config = maintenanceConfig,
+                            isMaintenanceActive = isMaintenanceActive,
+                            remainingMillisFlow = maintenanceRemainingMillisFlow ?: fallbackRemainingFlow,
+                            serverTimeOffsetMs = serverTimeOffsetMs,
+                            isUpdating = isUpdatingMaintenance,
+                            feedback = maintenanceFeedback,
+                            onActivateMaintenance = onActivateMaintenance,
+                            onExtendMaintenance = onExtendMaintenance,
+                            onDisableMaintenance = onDisableMaintenance,
+                            onDismissFeedback = onClearMaintenanceFeedback
+                        )
+                    }
+                    item {
+                        SystemControlsMaintenanceCard(
+                            isSystemShutdown = isSystemShutdown,
+                            isResettingLeaderboard = isResettingLeaderboard,
+                            onRequestResetLeaderboard = { showResetLeaderboardConfirmDialog = true },
+                            onRequestToggleSystemShutdown = { targetState ->
+                                pendingShutdownTargetState = targetState
+                                showShutdownConfirmDialog = true
+                            }
+                        )
+                    }
+                }
             }
         }
 
@@ -8199,6 +8414,257 @@ private fun AdminScreenScope.AdminPanelContent() {
             },
             dismissButton = {
                 OutlinedButton(onClick = { showConfirmLogoutAllDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showResetLeaderboardConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showResetLeaderboardConfirmDialog = false },
+            modifier = Modifier.testTag("admin_reset_leaderboard_confirm_dialog"),
+            icon = {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(Color(0xFFFEF3C7), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.RestartAlt,
+                        contentDescription = "Reset Leaderboard",
+                        tint = Color(0xFFD97706),
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            },
+            title = {
+                Text(
+                    text = "Reset Leaderboard?",
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFD97706)
+                )
+            },
+            text = {
+                Text(
+                    text = "Are you sure you want to reset the leaderboard? All leaderboard XP for all students will be reset to 0.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showResetLeaderboardConfirmDialog = false
+                        onResetLeaderboard()
+                        Toast.makeText(context, "Leaderboard XP reset to 0 for all students!", Toast.LENGTH_LONG).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                    modifier = Modifier.testTag("admin_reset_leaderboard_confirm_yes")
+                ) {
+                    Text("Yes, Reset XP to 0")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showResetLeaderboardConfirmDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showShutdownConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showShutdownConfirmDialog = false },
+            modifier = Modifier.testTag("admin_shutdown_confirm_dialog"),
+            icon = {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(Color(0xFFFEE2E2), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PowerSettingsNew,
+                        contentDescription = "System Shutdown Confirmation",
+                        tint = Color(0xFFDC2626),
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            },
+            title = {
+                Text(
+                    text = if (pendingShutdownTargetState) "Shut Down System Portals?" else "Restore System Portals?",
+                    fontWeight = FontWeight.Bold,
+                    color = if (pendingShutdownTargetState) Color(0xFFDC2626) else Color(0xFF059669)
+                )
+            },
+            text = {
+                Text(
+                    text = if (pendingShutdownTargetState) {
+                        "Are you sure you want to shut down the system? All Student and Mentor portals will shut down and show 'Service Not Available'. Admin Portal will remain active."
+                    } else {
+                        "Are you sure you want to turn OFF system shutdown and restore access for all Student and Mentor portals?"
+                    },
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showShutdownConfirmDialog = false
+                        shutdownKeyInput = ""
+                        shutdownKeyError = null
+                        shutdownKeyVisible = false
+                        showShutdownKeyDialog = true
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (pendingShutdownTargetState) Color(0xFFDC2626) else Color(0xFF059669)
+                    ),
+                    modifier = Modifier.testTag("admin_shutdown_confirm_yes")
+                ) {
+                    Text("Yes")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showShutdownConfirmDialog = false }) {
+                    Text("No")
+                }
+            }
+        )
+    }
+
+    if (showShutdownKeyDialog) {
+        val submitShutdownKey: () -> Unit = {
+            val cleanKey = shutdownKeyInput.trim()
+            if (cleanKey.isEmpty()) {
+                shutdownKeyError = "Please enter the security key."
+            } else if (!isVerifyingShutdownKey) {
+                isVerifyingShutdownKey = true
+                shutdownKeyError = null
+                scope.launch {
+                    val matched = try {
+                        onVerifySystemSecurityKey(cleanKey)
+                    } catch (_: Exception) {
+                        false
+                    }
+                    isVerifyingShutdownKey = false
+                    if (matched) {
+                        showShutdownKeyDialog = false
+                        shutdownKeyInput = ""
+                        shutdownKeyError = null
+                        onToggleSystemShutdown(pendingShutdownTargetState)
+                        Toast.makeText(
+                            context,
+                            if (pendingShutdownTargetState) {
+                                "System Shutdown activated. Student & Mentor portals are now Not Available."
+                            } else {
+                                "System Shutdown disabled. Student & Mentor portals are back online."
+                            },
+                            Toast.LENGTH_LONG
+                        ).show()
+                    } else {
+                        shutdownKeyError = "Incorrect security key. Enter the current key configured in Firebase."
+                    }
+                }
+            }
+        }
+
+        AlertDialog(
+            onDismissRequest = { if (!isVerifyingShutdownKey) showShutdownKeyDialog = false },
+            modifier = Modifier.testTag("admin_shutdown_key_dialog"),
+            icon = {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(Color(0xFFEDE9FE), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Security,
+                        contentDescription = "Security Key",
+                        tint = Color(0xFF4F46E5),
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+            },
+            title = {
+                Text("Enter Security Key", fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = if (pendingShutdownTargetState) {
+                            "Enter the Firebase security key to shut down Student & Mentor portals."
+                        } else {
+                            "Enter the Firebase security key to restore Student & Mentor portals."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = shutdownKeyInput,
+                        onValueChange = {
+                            shutdownKeyInput = it
+                            shutdownKeyError = null
+                        },
+                        label = { Text("Security Key") },
+                        singleLine = true,
+                        visualTransformation = if (shutdownKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { shutdownKeyVisible = !shutdownKeyVisible }) {
+                                Icon(
+                                    imageVector = if (shutdownKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (shutdownKeyVisible) "Hide key" else "Show key"
+                                )
+                            }
+                        },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done
+                        ),
+                        keyboardActions = KeyboardActions(onDone = { submitShutdownKey() }),
+                        isError = shutdownKeyError != null,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("admin_shutdown_key_input")
+                    )
+                    if (shutdownKeyError != null) {
+                        Text(
+                            text = shutdownKeyError!!,
+                            color = Color(0xFFDC2626),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.testTag("admin_shutdown_key_error")
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = submitShutdownKey,
+                    enabled = !isVerifyingShutdownKey,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (pendingShutdownTargetState) Color(0xFFDC2626) else Color(0xFF059669)
+                    ),
+                    modifier = Modifier.testTag("admin_shutdown_key_submit")
+                ) {
+                    if (isVerifyingShutdownKey) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = Color.White
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+                    Text(if (pendingShutdownTargetState) "Confirm Shutdown" else "Confirm Restore")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { if (!isVerifyingShutdownKey) showShutdownKeyDialog = false },
+                    enabled = !isVerifyingShutdownKey
+                ) {
                     Text("Cancel")
                 }
             }
@@ -10079,7 +10545,8 @@ private fun AdminScreenScope.AdminPanelContent() {
 
             val matchesFilter = when (selectedStudentFilter) {
                 "PREMIUM" -> student.isPremium
-                "BLOCKED" -> student.isBlocked || student.isForceLoggedOut
+                "BLOCKED" -> student.isBlocked
+                "LOGGED_OUT" -> !student.isBlocked && student.isForceLoggedOut
                 else -> true
             }
             matchesSearch && matchesFilter
@@ -10284,7 +10751,8 @@ private fun AdminScreenScope.AdminPanelContent() {
 
             val matchesFilter = when (selectedStudentFilter) {
                 "PREMIUM" -> student.isPremium
-                "BLOCKED" -> student.isBlocked || student.isForceLoggedOut
+                "BLOCKED" -> student.isBlocked
+                "LOGGED_OUT" -> !student.isBlocked && student.isForceLoggedOut
                 else -> true
             }
             matchesSearch && matchesFilter

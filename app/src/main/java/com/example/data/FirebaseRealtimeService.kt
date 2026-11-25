@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
 
@@ -1218,5 +1219,290 @@ object FirebaseRealtimeService {
         }
         ref.addValueEventListener(listener)
         awaitClose { ref.removeEventListener(listener) }
+    }
+
+    private suspend fun <T> com.google.android.gms.tasks.Task<T>.awaitSafe(): T? {
+        return withTimeoutOrNull(4500L) {
+            suspendCancellableCoroutine { cont ->
+                addOnSuccessListener { result ->
+                    if (cont.isActive) cont.resume(result)
+                }
+                addOnFailureListener {
+                    if (cont.isActive) cont.resume(null)
+                }
+            }
+        }
+    }
+
+    suspend fun seedSystemSecurityKeyIfMissing(
+        initialKey: String = SystemControlConfig.DEFAULT_SYSTEM_SECURITY_KEY
+    ) {
+        try {
+            val adminConfigRef = database.getReference("admin_config")
+            val snapshot = adminConfigRef.get().awaitSafe()
+            val existingSecKey = snapshot?.child("securityKey")?.value?.toString()?.trim()
+            if (existingSecKey.isNullOrBlank()) {
+                val existingPin = snapshot?.child("pin")?.value?.toString()?.trim()
+                val keyToSeed = if (!existingPin.isNullOrBlank()) existingPin else initialKey
+                val updates = mutableMapOf<String, Any>(
+                    "securityKey" to keyToSeed,
+                    "securityKeyUpdatedAtMillis" to System.currentTimeMillis()
+                )
+                if (existingPin.isNullOrBlank()) {
+                    updates["pin"] = keyToSeed
+                }
+                adminConfigRef.updateChildren(updates).awaitSafe()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error seeding RTDB system security key: ${e.message}")
+        }
+    }
+
+    data class RtdbSecurityKeySnapshot(
+        val securityKey: String? = null,
+        val pin: String? = null,
+        val updatedAtMillis: Long = 0L
+    )
+
+    fun observeSystemSecurityKeyFromRTDB(): Flow<RtdbSecurityKeySnapshot?> = callbackFlow {
+        val ref = database.getReference("admin_config")
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val secKey = snapshot.child("securityKey").value?.toString()?.trim()
+                val pin = snapshot.child("pin").value?.toString()?.trim()
+                val updatedAt = snapshot.child("securityKeyUpdatedAtMillis").getValue(Long::class.java) ?: 0L
+                trySend(RtdbSecurityKeySnapshot(securityKey = secKey, pin = pin, updatedAtMillis = updatedAt))
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                trySend(null)
+            }
+        }
+        ref.addValueEventListener(listener)
+        awaitClose { ref.removeEventListener(listener) }
+    }
+
+    suspend fun getSystemSecurityKeyOnceFromRTDB(): RtdbSecurityKeySnapshot? {
+        return try {
+            val snapshot = database.getReference("admin_config").get().awaitSafe() ?: return null
+            if (!snapshot.exists()) return null
+            val secKey = snapshot.child("securityKey").value?.toString()?.trim()
+            val pin = snapshot.child("pin").value?.toString()?.trim()
+            val updatedAt = snapshot.child("securityKeyUpdatedAtMillis").getValue(Long::class.java) ?: 0L
+            RtdbSecurityKeySnapshot(securityKey = secKey, pin = pin, updatedAtMillis = updatedAt)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error reading RTDB security key: ${e.message}")
+            null
+        }
+    }
+
+    suspend fun saveSystemShutdownToRTDB(
+        isShutdown: Boolean,
+        updatedBy: String,
+        updatedAtMillis: Long = System.currentTimeMillis()
+    ) {
+        try {
+            val adminConfigRef = database.getReference("admin_config")
+            val updates = mapOf<String, Any>(
+                "systemShutdown" to isShutdown,
+                "systemStatus" to mapOf(
+                    "isShutdown" to isShutdown,
+                    "updatedAtMillis" to updatedAtMillis,
+                    "updatedBy" to updatedBy
+                )
+            )
+            adminConfigRef.updateChildren(updates).awaitSafe()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error saving system shutdown to RTDB: ${e.message}")
+        }
+    }
+
+    fun observeSystemShutdownFromRTDB(): Flow<SystemControlConfig.SystemShutdownStatus?> = callbackFlow {
+        val ref = database.getReference("admin_config")
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                if (!snapshot.exists()) {
+                    trySend(null)
+                    return
+                }
+                val statusNode = snapshot.child("systemStatus")
+                val boolDirect = snapshot.child("systemShutdown").getValue(Boolean::class.java)
+                val statusBool = statusNode.child("isShutdown").getValue(Boolean::class.java)
+                val updatedAt = statusNode.child("updatedAtMillis").getValue(Long::class.java) ?: 0L
+                val updatedBy = statusNode.child("updatedBy").getValue(String::class.java) ?: ""
+                val effectiveBool = statusBool ?: boolDirect
+                if (effectiveBool != null) {
+                    trySend(
+                        SystemControlConfig.SystemShutdownStatus(
+                            isShutdown = effectiveBool,
+                            updatedAtMillis = updatedAt,
+                            updatedBy = updatedBy
+                        )
+                    )
+                } else {
+                    trySend(null)
+                }
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                trySend(null)
+            }
+        }
+        ref.addValueEventListener(listener)
+        awaitClose { ref.removeEventListener(listener) }
+    }
+
+    suspend fun saveLeaderboardResetAtToRTDB(resetAtMillis: Long) {
+        try {
+            database.getReference("admin_config")
+                .child("leaderboardResetAt")
+                .setValue(resetAtMillis)
+                .awaitSafe()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error saving leaderboardResetAt to RTDB: ${e.message}")
+        }
+    }
+
+    fun observeLeaderboardResetAtFromRTDB(): Flow<Long> = callbackFlow {
+        val ref = database.getReference("admin_config").child("leaderboardResetAt")
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val ts = snapshot.getValue(Long::class.java)
+                    ?: snapshot.value?.toString()?.toLongOrNull()
+                    ?: 0L
+                trySend(ts)
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                trySend(0L)
+            }
+        }
+        ref.addValueEventListener(listener)
+        awaitClose { ref.removeEventListener(listener) }
+    }
+
+    suspend fun resetAllLeaderboardXpInRTDB(resetAtMillis: Long = System.currentTimeMillis()): Boolean {
+        return try {
+            val batchUpdates = mutableMapOf<String, Any>()
+
+            val lbSnapshot = database.getReference("leaderboard").get().awaitSafe()
+            if (lbSnapshot != null && lbSnapshot.exists()) {
+                for (child in lbSnapshot.children) {
+                    val key = child.key ?: continue
+                    batchUpdates["leaderboard/$key/points"] = 0
+                    batchUpdates["leaderboard/$key/xp"] = 0
+                    batchUpdates["leaderboard/$key/rank"] = 0
+                }
+            }
+
+            val xpSnapshot = database.getReference("liveXP").get().awaitSafe()
+            if (xpSnapshot != null && xpSnapshot.exists()) {
+                for (child in xpSnapshot.children) {
+                    val key = child.key ?: continue
+                    batchUpdates["liveXP/$key/xp"] = 0
+                    batchUpdates["liveXP/$key/points"] = 0
+                    batchUpdates["liveXP/$key/level"] = 1
+                    batchUpdates["liveXP/$key/rank"] = 0
+                    batchUpdates["liveXP/$key/updatedAt"] = resetAtMillis
+                }
+            }
+
+            batchUpdates["admin_config/leaderboardResetAt"] = resetAtMillis
+
+            if (batchUpdates.isNotEmpty()) {
+                database.reference.updateChildren(batchUpdates).awaitSafe()
+            }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error resetting leaderboard XP in RTDB: ${e.message}")
+            false
+        }
+    }
+
+    // -------------------------------------------------------------
+    // APP-WIDE MAINTENANCE MODE & SERVER TIME OFFSET (RTDB)
+    // -------------------------------------------------------------
+    fun observeServerTimeOffsetMs(): Flow<Long> = callbackFlow {
+        val offsetRef = database.getReference(".info/serverTimeOffset")
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val offset = when (val raw = snapshot.value) {
+                    is Number -> raw.toLong()
+                    is String -> raw.toLongOrNull() ?: 0L
+                    else -> 0L
+                }
+                trySend(offset)
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                trySend(0L)
+            }
+        }
+        offsetRef.addValueEventListener(listener)
+        awaitClose { offsetRef.removeEventListener(listener) }
+    }
+
+    fun observeMaintenanceConfigFromRTDB(): Flow<MaintenanceConfig?> = callbackFlow {
+        val ref = database.getReference("admin_config").child("maintenance")
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                if (!snapshot.exists()) {
+                    trySend(null)
+                    return
+                }
+                val enabled = when (val raw = snapshot.child("maintenanceEnabled").value) {
+                    is Boolean -> raw
+                    is Number -> raw.toInt() == 1
+                    is String -> raw.equals("true", ignoreCase = true)
+                    else -> false
+                }
+                val startTime = (snapshot.child("maintenanceStartTime").value as? Number)?.toLong()
+                    ?: snapshot.child("maintenanceStartTime").value?.toString()?.toLongOrNull()
+                    ?: 0L
+                val endTime = (snapshot.child("maintenanceEndTime").value as? Number)?.toLong()
+                    ?: snapshot.child("maintenanceEndTime").value?.toString()?.toLongOrNull()
+                    ?: 0L
+                val updatedAt = (snapshot.child("updatedAt").value as? Number)?.toLong()
+                    ?: snapshot.child("updatedAt").value?.toString()?.toLongOrNull()
+                    ?: 0L
+                val updatedBy = snapshot.child("updatedBy").value?.toString().orEmpty()
+
+                trySend(
+                    MaintenanceConfig(
+                        maintenanceEnabled = enabled,
+                        maintenanceStartTime = startTime,
+                        maintenanceEndTime = endTime,
+                        updatedAt = updatedAt,
+                        updatedBy = updatedBy
+                    )
+                )
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                trySend(null)
+            }
+        }
+        ref.addValueEventListener(listener)
+        awaitClose { ref.removeEventListener(listener) }
+    }
+
+    suspend fun saveMaintenanceConfigToRTDB(config: MaintenanceConfig): Boolean {
+        return try {
+            val map = mapOf<String, Any>(
+                "maintenanceEnabled" to config.maintenanceEnabled,
+                "maintenanceStartTime" to config.maintenanceStartTime,
+                "maintenanceEndTime" to config.maintenanceEndTime,
+                "updatedAt" to config.updatedAt,
+                "updatedBy" to config.updatedBy
+            )
+            database.getReference("admin_config")
+                .child("maintenance")
+                .setValue(map)
+                .awaitSafe() != null
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "Error saving maintenance config to RTDB: ${e.message}")
+            false
+        }
     }
 }

@@ -324,6 +324,8 @@ data class StudentNotification(
     val createdAtMillis: Long = System.currentTimeMillis()
 )
 
+typealias AppNotification = StudentNotification
+
 data class PaymentReceipt(
     val receiptId: String = "",
     val userId: String = "kcet_std_001",
