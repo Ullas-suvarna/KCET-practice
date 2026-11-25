@@ -126,7 +126,9 @@ fun ProfileScreen(
     onDeleteTestResult: (Int) -> Unit = {},
     onClearTestHistory: () -> Unit = {},
     onChallengeStudent: ((LeaderboardEntry) -> Unit)? = null,
-    onLinkPassword: (String, String) -> Unit
+    onLinkPassword: (String, String) -> Unit,
+    leaderboardCycle: com.example.data.SystemControlConfig.LeaderboardCycleStatus = com.example.data.SystemControlConfig.LeaderboardCycleStatus(),
+    leaderboardRemainingMillisFlow: kotlinx.coroutines.flow.StateFlow<Long>? = null
 ) {
     val context = LocalContext.current
 
@@ -262,6 +264,8 @@ fun ProfileScreen(
             item {
                 LeaderboardCard(
                     leaderboardEntries = leaderboardEntries,
+                    leaderboardCycle = leaderboardCycle,
+                    leaderboardRemainingMillisFlow = leaderboardRemainingMillisFlow,
                     onChallengeStudent = onChallengeStudent
                 )
             }

@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -132,6 +133,10 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
 
     private val prefs = app.getSharedPreferences("kcet_genz_prefs", Context.MODE_PRIVATE)
 
+    init {
+        com.example.data.FirebaseService.initContext(app.applicationContext)
+    }
+
     private val _hasSeenDeveloperIntro = MutableStateFlow(
         prefs.getBoolean("has_seen_dev_intro", true)
     )
@@ -223,9 +228,6 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
     val showBadgeCongratsDialog: StateFlow<Boolean> = _showBadgeCongratsDialog.asStateFlow()
 
     // Auth & User Profile State
-    init {
-        com.example.data.FirebaseService.initContext(app.applicationContext)
-    }
     private val sessionPrefs: android.content.SharedPreferences = app.getSharedPreferences("kcet_session_v2", android.content.Context.MODE_PRIVATE)
 
     // Gamification & Points State
@@ -255,6 +257,52 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
     val isResettingLeaderboard: StateFlow<Boolean> = _isResettingLeaderboard.asStateFlow()
 
     private var activeLeaderboardResetAt: Long = prefs.getLong("last_handled_leaderboard_reset_at", 0L)
+    private var lastAutoResetCycleTargetMs: Long = 0L
+
+    private fun loadCachedLeaderboardCycle(): com.example.data.SystemControlConfig.LeaderboardCycleStatus {
+        val resetAt = prefs.getLong("leaderboard_cycle_reset_at", 0L)
+        val startAt = prefs.getLong("leaderboard_cycle_start_at", 0L)
+        val nextAt = prefs.getLong("leaderboard_cycle_next_reset_at", 0L)
+        if (nextAt > 0L) {
+            return com.example.data.SystemControlConfig.LeaderboardCycleStatus(
+                lastResetAtMillis = resetAt,
+                cycleStartAtMillis = startAt,
+                nextResetAtMillis = nextAt
+            )
+        }
+        val now = System.currentTimeMillis()
+        val seeded = com.example.data.SystemControlConfig.LeaderboardCycleStatus(
+            lastResetAtMillis = resetAt,
+            cycleStartAtMillis = now,
+            nextResetAtMillis = now + com.example.data.SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS
+        )
+        persistLeaderboardCycle(seeded)
+        return seeded
+    }
+
+    private fun persistLeaderboardCycle(cycle: com.example.data.SystemControlConfig.LeaderboardCycleStatus) {
+        prefs.edit()
+            .putLong("leaderboard_cycle_reset_at", cycle.lastResetAtMillis)
+            .putLong("leaderboard_cycle_start_at", cycle.effectiveCycleStartAtMillis)
+            .putLong("leaderboard_cycle_next_reset_at", cycle.effectiveNextResetAtMillis)
+            .apply()
+    }
+
+    private val _leaderboardCycle = MutableStateFlow(loadCachedLeaderboardCycle())
+    val leaderboardCycle: StateFlow<com.example.data.SystemControlConfig.LeaderboardCycleStatus> = _leaderboardCycle.asStateFlow()
+
+    private val _leaderboardNowMs = MutableStateFlow(System.currentTimeMillis())
+
+    val leaderboardRemainingMillis: StateFlow<Long> = combine(
+        _leaderboardCycle,
+        _leaderboardNowMs
+    ) { cycle, nowMs ->
+        cycle.remainingMillis(nowMs)
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = _leaderboardCycle.value.remainingMillis(System.currentTimeMillis())
+    )
 
     // Global App-Wide Maintenance Mode State (Persisted across restarts in global prefs, synced live via Firestore + RTDB)
     private fun loadCachedMaintenanceConfig(): MaintenanceConfig {
@@ -319,152 +367,6 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
     val maintenanceFeedback: StateFlow<Pair<Boolean, String>?> = _maintenanceFeedback.asStateFlow()
 
     private var lastAutoDisabledEndTime: Long = 0L
-
-    init {
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            FirebaseService.ensureSystemSecurityKeySeeded()
-        }
-
-        // Observe Firebase server time offset for drift-free synchronized maintenance countdowns
-        viewModelScope.launch {
-            FirebaseRealtimeService.observeServerTimeOffsetMs().collect { offsetMs ->
-                _serverTimeOffsetMs.value = offsetMs
-                prefs.edit().putLong("maintenance_server_time_offset_ms", offsetMs).apply()
-                _maintenanceNowMs.value = currentServerTimeMillis()
-            }
-        }
-
-        // Single shared real-time listener combining Firestore + RTDB for Maintenance Mode
-        viewModelScope.launch {
-            kotlinx.coroutines.flow.combine(
-                FirebaseService.observeMaintenanceConfig(),
-                FirebaseRealtimeService.observeMaintenanceConfigFromRTDB()
-            ) { fsConfig, rtdbConfig ->
-                MaintenanceControlConfig.resolveAuthoritativeConfig(fsConfig, rtdbConfig)
-            }.collect { remoteConfig ->
-                if (remoteConfig != null) {
-                    _maintenanceConfig.value = remoteConfig
-                    persistMaintenanceConfig(remoteConfig)
-                    val now = currentServerTimeMillis()
-                    _maintenanceNowMs.value = now
-                    if (remoteConfig.isEffectivelyActive(now) && _currentScreen.value == Screen.EXAM) {
-                        _isTimerPaused.value = true
-                    }
-                    if (remoteConfig.isExpired(now)) {
-                        handleMaintenanceExpired(remoteConfig, now)
-                    }
-                }
-            }
-        }
-
-        // Drift-free 1-second maintenance ticker (runs ONLY while maintenanceEnabled == true)
-        viewModelScope.launch {
-            _maintenanceConfig.collectLatest { cfg ->
-                if (!cfg.maintenanceEnabled || cfg.maintenanceEndTime <= 0L) {
-                    _maintenanceNowMs.value = currentServerTimeMillis()
-                    return@collectLatest
-                }
-                while (true) {
-                    val now = currentServerTimeMillis()
-                    _maintenanceNowMs.value = now
-                    if (cfg.isEffectivelyActive(now) && _currentScreen.value == Screen.EXAM) {
-                        _isTimerPaused.value = true
-                    }
-                    if (cfg.isExpired(now)) {
-                        handleMaintenanceExpired(cfg, now)
-                        break
-                    }
-                    val rem = cfg.remainingMillis(now)
-                    val nextDelayMs = if (rem <= 0L) 1000L else ((rem - 1L) % 1000L + 1L).coerceIn(50L, 1000L)
-                    delay(nextDelayMs)
-                }
-            }
-        }
-
-        viewModelScope.launch {
-            kotlinx.coroutines.flow.combine(
-                FirebaseService.observeSystemShutdownStatus(),
-                FirebaseRealtimeService.observeSystemShutdownFromRTDB()
-            ) { fsStatus, rtdbStatus ->
-                if (fsStatus == null && rtdbStatus == null) {
-                    null
-                } else {
-                    com.example.data.SystemControlConfig.resolveSystemShutdownStatus(fsStatus, rtdbStatus)
-                }
-            }.collect { shutdownState ->
-                if (shutdownState != null) {
-                    _isSystemShutdown.value = shutdownState
-                    prefs.edit().putBoolean("system_shutdown_active", shutdownState).apply()
-                    if (shutdownState && _currentScreen.value == Screen.EXAM) {
-                        _isTimerPaused.value = true
-                    }
-                }
-            }
-        }
-
-        viewModelScope.launch {
-            kotlinx.coroutines.flow.combine(
-                FirebaseService.observeFirestoreSecurityKeySnapshot(),
-                FirebaseRealtimeService.observeSystemSecurityKeyFromRTDB()
-            ) { fsSnap, rtdbSnap ->
-                if (fsSnap == null && rtdbSnap == null) {
-                    null
-                } else {
-                    com.example.data.SystemControlConfig.resolveEffectiveSecurityKey(
-                        firestoreSnapshot = fsSnap,
-                        rtdbSecurityKey = rtdbSnap?.securityKey,
-                        rtdbPin = rtdbSnap?.pin,
-                        rtdbUpdatedAtMillis = rtdbSnap?.updatedAtMillis ?: 0L
-                    )
-                }
-            }.collect { resolvedKey ->
-                if (!resolvedKey.isNullOrBlank()) {
-                    _systemSecurityKey.value = resolvedKey
-                    prefs.edit().putString("cached_system_security_key", resolvedKey).apply()
-                }
-            }
-        }
-
-        viewModelScope.launch {
-            kotlinx.coroutines.flow.combine(
-                FirebaseService.observeLeaderboardResetAt(),
-                FirebaseRealtimeService.observeLeaderboardResetAtFromRTDB()
-            ) { fsResetTs, rtdbResetTs ->
-                maxOf(fsResetTs, rtdbResetTs)
-            }.collect { remoteResetAt ->
-                if (remoteResetAt > 0L && remoteResetAt > activeLeaderboardResetAt) {
-                    activeLeaderboardResetAt = remoteResetAt
-                    prefs.edit().putLong("last_handled_leaderboard_reset_at", remoteResetAt).apply()
-                    zeroLocalStudentXp()
-                    updateLeaderboard()
-                }
-            }
-        }
-
-        viewModelScope.launch {
-            kotlinx.coroutines.flow.combine(
-                FirebaseService.observeAdminPricing(),
-                FirebaseRealtimeService.observeAdminPricingFromRTDB()
-            ) { fsPricing, rtdbMap ->
-                val chat = rtdbMap?.get("liveChatPrice")?.toString()?.toIntOrNull()
-                    ?: rtdbMap?.get("live_chat_price")?.toString()?.toIntOrNull()
-                    ?: fsPricing.liveChatPrice
-                val sub = rtdbMap?.get("subscriptionPrice")?.toString()?.toIntOrNull()
-                    ?: rtdbMap?.get("subscription_price")?.toString()?.toIntOrNull()
-                    ?: fsPricing.subscriptionPrice
-                Pair(chat, sub)
-            }.collect { (chat, sub) ->
-                if (chat > 0) {
-                    _liveChatPrice.value = chat
-                    sessionPrefs.edit().putInt("admin_live_chat_price", chat).apply()
-                }
-                if (sub > 0) {
-                    _subscriptionPrice.value = sub
-                    sessionPrefs.edit().putInt("admin_subscription_price", sub).apply()
-                }
-            }
-        }
-    }
 
     private fun zeroLocalStudentXp() {
         _userPoints.value = 0
@@ -1121,246 +1023,6 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
 
     private val _keaLastSyncedDate = MutableStateFlow("Today, August 08, 2026")
     val keaLastSyncedDate: StateFlow<String> = _keaLastSyncedDate.asStateFlow()
-
-    init {
-        // Continuously observe statewide leaderboard across all students
-        leaderboardJob?.cancel()
-        leaderboardJob = viewModelScope.launch {
-            repository.leaderboard.collect { remoteEntries ->
-                updateLeaderboard(remoteEntries)
-            }
-        }
-
-        updateLeaderboard()
-        
-        val isSavedLoggedIn = sessionPrefs.getBoolean("is_logged_in", false)
-        val currentFbUser = FirebaseService.auth.currentUser
-        val savedEmail = sessionPrefs.getString("user_email", "") ?: currentFbUser?.email ?: ""
-        val isAdminOrDemo = savedEmail.equals("ullassuvarna65@gmail.com", ignoreCase = true) ||
-                savedEmail.equals("karthik.kcet2026@gmail.com", ignoreCase = true) ||
-                sessionPrefs.getBoolean("is_admin", false) ||
-                !savedEmail.contains("@")
-
-        if (!isAdminOrDemo && currentFbUser != null) {
-            viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                try {
-                    currentFbUser.reload().awaitResult()
-                } catch (_: Exception) {}
-            }
-        }
-
-        val effectiveLoggedIn = sessionPrefs.getBoolean("is_logged_in", false)
-
-        if (effectiveLoggedIn || currentFbUser != null) {
-            val savedUid = sessionPrefs.getString("user_uid", null) ?: currentFbUser?.uid ?: ""
-            val savedEmailFinal = sessionPrefs.getString("user_email", null) ?: currentFbUser?.email ?: ""
-            
-            if (savedUid.isNotBlank() || savedEmailFinal.isNotBlank()) {
-                startObservingUserData(savedUid, savedEmailFinal)
-
-                viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                    val remoteXP = FirebaseService.getUserPointsOnce(savedUid, savedEmailFinal)
-                    if (remoteXP > _userPoints.value) {
-                        _userPoints.value = remoteXP
-                        sessionPrefs.edit().putInt("user_xp", remoteXP).putInt("user_xp_$savedUid", remoteXP).apply()
-                        _analyticsSummary.value = _analyticsSummary.value.copy(totalPoints = remoteXP)
-                        updateLeaderboard()
-                    }
-                }
-                
-                viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                    val isAdminSession = savedEmailFinal.trim().equals("ullassuvarna65@gmail.com", ignoreCase = true) ||
-                            savedUid == "admin_ullas" ||
-                            sessionPrefs.getBoolean("is_admin", false)
-                    if (!isAdminSession) {
-                        val blockCheck = FirebaseService.checkIfUserIsBlocked(savedUid)
-                        val emailCheck = if (savedEmailFinal.isNotBlank()) FirebaseService.checkIfUserIsBlocked(savedEmailFinal) else Pair(false, "")
-                        if (blockCheck.first || emailCheck.first) {
-                            val reason = if (blockCheck.first) blockCheck.second else emailCheck.second
-                            logout()
-                            _blockedAccountAlert.value = Pair(savedEmailFinal, reason.ifBlank { "Account blocked by Administrator." })
-                        } else {
-                            val remoteProfile = FirebaseService.getUserProfileOnce(savedUid)
-                            if (remoteProfile != null) {
-                                if (remoteProfile.isBlocked) {
-                                    logout()
-                                    _blockedAccountAlert.value = Pair(savedEmailFinal, remoteProfile.blockReason.ifBlank { "Account blocked by Administrator." })
-                                } else {
-                                    _userProfile.value = remoteProfile
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Clean up any historical KEA schedule update spam notifications from Firestore completely
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            FirebaseService.cleanupScheduleSpamNotifications()
-        }
-
-        // Ensure welcome notification only appears on the very first session of opening the app
-        viewModelScope.launch {
-            delay(5000)
-            markWelcomeNotificationAsShown()
-        }
-
-        viewModelScope.launch {
-            userProfile.collect {
-                updateLeaderboard()
-            }
-        }
-
-        viewModelScope.launch {
-            userPoints.collect {
-                updateLeaderboard()
-            }
-        }
-
-        viewModelScope.launch {
-            repository.cleanupDuplicateTestResults()
-        }
-
-        viewModelScope.launch {
-            testResultsHistory.collect { results ->
-                val uniqueResults = getUniqueAttempts(results)
-                if (uniqueResults.isNotEmpty()) {
-                    val totalCorrect = uniqueResults.sumOf { it.correctCount }
-                    val totalQs = uniqueResults.sumOf { it.totalQuestions }
-                    val calculatedAcc = if (totalQs > 0) (totalCorrect.toFloat() / totalQs) * 100f else 0f
-                    val currentXP = _userPoints.value
-                    val uid = _userProfile.value.uid
-                    _analyticsSummary.value = _analyticsSummary.value.copy(
-                        totalTestsTaken = maxOf(_analyticsSummary.value.totalTestsTaken, uniqueResults.size),
-                        overallAccuracy = if (calculatedAcc > 0f) calculatedAcc else _analyticsSummary.value.overallAccuracy,
-                        totalPoints = currentXP,
-                        avgTimePerQuestionSec = uniqueResults.map { it.timeTakenSeconds.toFloat() / it.totalQuestions }.average().toFloat()
-                    )
-                    updateLeaderboard()
-                    if (currentXP > 0 && (uid.isNotBlank() || _userProfile.value.email.isNotBlank())) {
-                        FirebaseService.updateLeaderboardEntry(
-                            profile = _userProfile.value,
-                            points = currentXP,
-                            accuracy = calculatedAcc,
-                            testsCount = uniqueResults.size
-                        )
-                    }
-                } else {
-                    _analyticsSummary.value = _analyticsSummary.value.copy(
-                        totalPoints = _userPoints.value
-                    )
-                    updateLeaderboard()
-                }
-            }
-        }
-
-        viewModelScope.launch {
-            allStudents.collect { studentsList ->
-                val currentUser = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser
-                val isAdmin = sessionPrefs.getBoolean("is_admin", false) ||
-                        _userProfile.value.email.equals("ullassuvarna65@gmail.com", ignoreCase = true) ||
-                        _userProfile.value.uid == "admin_ullas" ||
-                        (sessionPrefs.getString("user_email", "") ?: "").equals("ullassuvarna65@gmail.com", ignoreCase = true)
-                android.util.Log.d("AdminLogoutDebug", "isAdmin: $isAdmin, isLoggedIn: ${_isLoggedIn.value}, userProfileEmail: ${_userProfile.value.email}")
-                val isMentor = _currentScreen.value == Screen.SENIOR_CHAT || _userProfile.value.email.equals("ullassuvarna85@gmail.com", ignoreCase = true) || registeredMentors.value.any { it.email.isNotBlank() && it.email.equals(_userProfile.value.email.trim(), ignoreCase = true) }
-                if (_isLoggedIn.value && !isAdmin && !isMentor) {
-                    android.util.Log.d("AdminLogoutDebug", "Checking force logout for user: ${_userProfile.value.email}")
-                    val me = _userProfile.value
-                    val match = studentsList.find { student ->
-                        student.uid.equals(me.uid, ignoreCase = true) ||
-                        (me.email.isNotBlank() && student.email.equals(me.email, ignoreCase = true)) ||
-                        (me.formattedStudentId.isNotBlank() && student.formattedStudentId.equals(me.formattedStudentId, ignoreCase = true))
-                    }
-                    if (match != null) {
-                        val override = FirebaseService.getPremiumOverride(me.uid)
-                            ?: (if (me.email.isNotBlank()) FirebaseService.getPremiumOverride(me.email) else null)
-                            ?: (if (me.formattedStudentId.isNotBlank()) FirebaseService.getPremiumOverride(me.formattedStudentId) else null)
-
-                            val targetPremium = when {
-                                override != null -> override
-                                match.isPremium -> true
-                                sessionPrefs.getBoolean("is_premium", false) -> true
-                                (me.uid.isNotBlank() && sessionPrefs.getBoolean("is_premium_${me.uid}", false)) -> true
-                                (me.email.isNotBlank() && sessionPrefs.getBoolean("is_premium_${me.email}", false)) -> true
-                                else -> me.isPremium
-                            }
-
-                            if (me.isPremium != targetPremium) {
-                                _userProfile.value = me.copy(isPremium = targetPremium)
-                                val editor = sessionPrefs.edit().putBoolean("is_premium", targetPremium)
-                                if (me.uid.isNotBlank()) editor.putBoolean("is_premium_${me.uid}", targetPremium)
-                                if (me.email.isNotBlank()) editor.putBoolean("is_premium_${me.email}", targetPremium)
-                                editor.apply()
-                                if (!targetPremium) {
-                                    _userBadges.value = defaultLockedBadges
-                                }
-                            }
-                    }
-                }
-            }
-        }
-
-        val viewModelStartTime = System.currentTimeMillis()
-        val shownSystemNotificationIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
-
-        viewModelScope.launch {
-            notifications.collect { notifList ->
-                // Avoid showing old/historic notifications on app launch, only trigger system alert for new ones
-                notifList.forEach { notif ->
-                    if (!notif.isRead && 
-                        notif.createdAtMillis >= viewModelStartTime - 10000 && 
-                        !shownSystemNotificationIds.contains(notif.id)
-                    ) {
-                        shownSystemNotificationIds.add(notif.id)
-                        try {
-                            DailyNotificationManager.showSystemNotification(
-                                context = app,
-                                title = notif.title,
-                                message = notif.message,
-                                channelId = if (notif.type == "ANNOUNCEMENT" || notif.type == "EXAM_ALERT") {
-                                    DailyNotificationManager.CHANNEL_INSTANT_ALERTS
-                                } else {
-                                    DailyNotificationManager.CHANNEL_STUDY_UPDATES
-                                }
-                            )
-                        } catch (e: Exception) {
-                            android.util.Log.e("MainViewModel", "Error showing real-time system notification: ${e.message}")
-                        }
-                    }
-                }
-            }
-        }
-
-        // Start observation immediately if already logged in from saved session (only if not already started)
-        if (sessionPrefs.getBoolean("is_logged_in", false) && currentFbUser == null) {
-            val savedUid = sessionPrefs.getString("user_uid", "") ?: ""
-            val savedEmail = sessionPrefs.getString("user_email", "") ?: ""
-            if (savedUid.isNotBlank() || savedEmail.isNotBlank()) {
-                startObservingUserData(savedUid, savedEmail)
-            }
-        }
-
-        // Dynamically listen to Firebase Auth changes to safely trigger Realtime DB/Firestore observers
-        FirebaseService.auth.addAuthStateListener { firebaseAuth ->
-            val firebaseUser = firebaseAuth.currentUser
-            if (firebaseUser != null) {
-                startObservingUserData(firebaseUser.uid, firebaseUser.email ?: "")
-            } else {
-                if (!sessionPrefs.getBoolean("is_logged_in", false)) {
-                    // Not authenticated in Firebase Auth and no saved session, cancel user-specific listeners
-                    profileJob?.cancel()
-                    testResultsJob?.cancel()
-                    paymentJob?.cancel()
-                    presenceJob?.cancel()
-                    liveXpJob?.cancel()
-                    realtimeNotifJob?.cancel()
-                    allOnlineJob?.cancel()
-                    allLiveXpJob?.cancel()
-                }
-            }
-        }
-    }
 
     fun bookSeniorChatSession(date: String, time: String, paymentRefNumber: String = "", receiptUri: String = "") {
         val user = userProfile.value
@@ -3854,6 +3516,7 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
     fun refreshMaintenanceClock() {
         val now = currentServerTimeMillis()
         _maintenanceNowMs.value = now
+        _leaderboardNowMs.value = now
         val cfg = _maintenanceConfig.value
         if (cfg.isExpired(now)) {
             viewModelScope.launch {
@@ -3861,6 +3524,10 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
             }
         } else if (cfg.isEffectivelyActive(now) && _currentScreen.value == Screen.EXAM) {
             _isTimerPaused.value = true
+        }
+        val lbCycle = _leaderboardCycle.value
+        if (lbCycle.isDueForReset(now)) {
+            triggerAutoLeaderboardCycleReset(lbCycle)
         }
     }
 
@@ -4076,19 +3743,55 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         if (_isResettingLeaderboard.value) return
         _isResettingLeaderboard.value = true
         viewModelScope.launch {
+            val resetTs = currentServerTimeMillis()
             val success = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                FirebaseService.resetAllStudentLeaderboardXp()
+                FirebaseService.resetAllStudentLeaderboardXp(resetTs = resetTs)
             }
             if (success) {
-                val resetTs = System.currentTimeMillis()
                 activeLeaderboardResetAt = maxOf(activeLeaderboardResetAt, resetTs)
                 prefs.edit().putLong("last_handled_leaderboard_reset_at", activeLeaderboardResetAt).apply()
+                val renewedCycle = com.example.data.SystemControlConfig.createLeaderboardCycleFromReset(resetTs)
+                _leaderboardCycle.value = renewedCycle
+                persistLeaderboardCycle(renewedCycle)
+                _leaderboardNowMs.value = resetTs
                 lastRemoteLeaderboardEntries = lastRemoteLeaderboardEntries?.map { it.copy(points = 0) }
                 zeroLocalStudentXp()
                 updateLeaderboard()
             }
             _isResettingLeaderboard.value = false
             onComplete?.invoke(success)
+        }
+    }
+
+    private fun triggerAutoLeaderboardCycleReset(expiredCycle: com.example.data.SystemControlConfig.LeaderboardCycleStatus) {
+        val targetEndAt = expiredCycle.effectiveNextResetAtMillis
+        if (targetEndAt <= 0L || lastAutoResetCycleTargetMs == targetEndAt || _isResettingLeaderboard.value) {
+            return
+        }
+        lastAutoResetCycleTargetMs = targetEndAt
+        _isResettingLeaderboard.value = true
+        viewModelScope.launch {
+            try {
+                val now = currentServerTimeMillis()
+                val (_, updatedCycle) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    FirebaseService.tryAutoResetLeaderboardIfExpired(nowMillis = now)
+                }
+                _leaderboardCycle.value = updatedCycle
+                persistLeaderboardCycle(updatedCycle)
+                _leaderboardNowMs.value = currentServerTimeMillis()
+
+                if (updatedCycle.lastResetAtMillis > activeLeaderboardResetAt) {
+                    activeLeaderboardResetAt = updatedCycle.lastResetAtMillis
+                    prefs.edit().putLong("last_handled_leaderboard_reset_at", activeLeaderboardResetAt).apply()
+                    lastRemoteLeaderboardEntries = lastRemoteLeaderboardEntries?.map { it.copy(points = 0) }
+                    zeroLocalStudentXp()
+                    updateLeaderboard()
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("MainViewModel", "Auto 30-day leaderboard reset error: ${e.message}")
+            } finally {
+                _isResettingLeaderboard.value = false
+            }
         }
     }
 
@@ -4798,6 +4501,488 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    init {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                FirebaseService.ensureSystemSecurityKeySeeded()
+            } catch (_: Exception) {}
+        }
+
+        // Observe Firebase server time offset for drift-free synchronized maintenance countdowns
+        viewModelScope.launch {
+            FirebaseRealtimeService.observeServerTimeOffsetMs()
+                .catch { e -> android.util.Log.w("MainViewModel", "Server time offset flow error: ${e.message}") }
+                .collect { offsetMs ->
+                    _serverTimeOffsetMs.value = offsetMs
+                    prefs.edit().putLong("maintenance_server_time_offset_ms", offsetMs).apply()
+                    _maintenanceNowMs.value = currentServerTimeMillis()
+                }
+        }
+
+        // Single shared real-time listener combining Firestore + RTDB for Maintenance Mode
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                FirebaseService.observeMaintenanceConfig().catch { emit(null) },
+                FirebaseRealtimeService.observeMaintenanceConfigFromRTDB().catch { emit(null) }
+            ) { fsConfig, rtdbConfig ->
+                MaintenanceControlConfig.resolveAuthoritativeConfig(fsConfig, rtdbConfig)
+            }.catch { e ->
+                android.util.Log.w("MainViewModel", "Maintenance observer flow error: ${e.message}")
+            }.collect { remoteConfig ->
+                if (remoteConfig != null) {
+                    _maintenanceConfig.value = remoteConfig
+                    persistMaintenanceConfig(remoteConfig)
+                    val now = currentServerTimeMillis()
+                    _maintenanceNowMs.value = now
+                    if (remoteConfig.isEffectivelyActive(now) && _currentScreen.value == Screen.EXAM) {
+                        _isTimerPaused.value = true
+                    }
+                    if (remoteConfig.isExpired(now)) {
+                        try {
+                            handleMaintenanceExpired(remoteConfig, now)
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+        }
+
+        // Drift-free 1-second maintenance ticker (runs ONLY while maintenanceEnabled == true)
+        viewModelScope.launch {
+            _maintenanceConfig.collectLatest { cfg ->
+                if (!cfg.maintenanceEnabled || cfg.maintenanceEndTime <= 0L) {
+                    _maintenanceNowMs.value = currentServerTimeMillis()
+                    return@collectLatest
+                }
+                while (true) {
+                    val now = currentServerTimeMillis()
+                    _maintenanceNowMs.value = now
+                    if (cfg.isEffectivelyActive(now) && _currentScreen.value == Screen.EXAM) {
+                        _isTimerPaused.value = true
+                    }
+                    if (cfg.isExpired(now)) {
+                        try {
+                            handleMaintenanceExpired(cfg, now)
+                        } catch (_: Exception) {}
+                        break
+                    }
+                    val rem = cfg.remainingMillis(now)
+                    val nextDelayMs = if (rem <= 0L) 1000L else ((rem - 1L) % 1000L + 1L).coerceIn(50L, 1000L)
+                    delay(nextDelayMs)
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                FirebaseService.observeSystemShutdownStatus().catch { emit(null) },
+                FirebaseRealtimeService.observeSystemShutdownFromRTDB().catch { emit(null) }
+            ) { fsStatus, rtdbStatus ->
+                if (fsStatus == null && rtdbStatus == null) {
+                    null
+                } else {
+                    com.example.data.SystemControlConfig.resolveSystemShutdownStatus(fsStatus, rtdbStatus)
+                }
+            }.catch { e ->
+                android.util.Log.w("MainViewModel", "System shutdown observer flow error: ${e.message}")
+            }.collect { shutdownState ->
+                if (shutdownState != null) {
+                    _isSystemShutdown.value = shutdownState
+                    prefs.edit().putBoolean("system_shutdown_active", shutdownState).apply()
+                    if (shutdownState && _currentScreen.value == Screen.EXAM) {
+                        _isTimerPaused.value = true
+                    }
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                FirebaseService.observeFirestoreSecurityKeySnapshot().catch { emit(null) },
+                FirebaseRealtimeService.observeSystemSecurityKeyFromRTDB().catch { emit(null) }
+            ) { fsSnap, rtdbSnap ->
+                if (fsSnap == null && rtdbSnap == null) {
+                    null
+                } else {
+                    com.example.data.SystemControlConfig.resolveEffectiveSecurityKey(
+                        firestoreSnapshot = fsSnap,
+                        rtdbSecurityKey = rtdbSnap?.securityKey,
+                        rtdbPin = rtdbSnap?.pin,
+                        rtdbUpdatedAtMillis = rtdbSnap?.updatedAtMillis ?: 0L
+                    )
+                }
+            }.catch { e ->
+                android.util.Log.w("MainViewModel", "Security key observer flow error: ${e.message}")
+            }.collect { resolvedKey ->
+                if (!resolvedKey.isNullOrBlank()) {
+                    _systemSecurityKey.value = resolvedKey
+                    prefs.edit().putString("cached_system_security_key", resolvedKey).apply()
+                }
+            }
+        }
+
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val seededCycle = FirebaseService.ensureLeaderboardCycleSeeded(currentServerTimeMillis())
+                _leaderboardCycle.value = seededCycle
+                persistLeaderboardCycle(seededCycle)
+                _leaderboardNowMs.value = currentServerTimeMillis()
+            } catch (_: Exception) {}
+        }
+
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                FirebaseService.observeLeaderboardCycleStatus().catch { emit(null) },
+                FirebaseRealtimeService.observeLeaderboardCycleFromRTDB().catch { emit(null) }
+            ) { fsCycle, rtdbCycle ->
+                com.example.data.SystemControlConfig.resolveLeaderboardCycleStatus(fsCycle, rtdbCycle)
+            }.catch { e ->
+                android.util.Log.w("MainViewModel", "Leaderboard cycle observer flow error: ${e.message}")
+            }.collect { remoteCycle ->
+                if (remoteCycle != null) {
+                    _leaderboardCycle.value = remoteCycle
+                    persistLeaderboardCycle(remoteCycle)
+                    val now = currentServerTimeMillis()
+                    _leaderboardNowMs.value = now
+                    if (remoteCycle.lastResetAtMillis > 0L && remoteCycle.lastResetAtMillis > activeLeaderboardResetAt) {
+                        activeLeaderboardResetAt = remoteCycle.lastResetAtMillis
+                        prefs.edit().putLong("last_handled_leaderboard_reset_at", remoteCycle.lastResetAtMillis).apply()
+                        lastRemoteLeaderboardEntries = lastRemoteLeaderboardEntries?.map { it.copy(points = 0) }
+                        zeroLocalStudentXp()
+                        updateLeaderboard()
+                    }
+                    if (remoteCycle.isDueForReset(now)) {
+                        triggerAutoLeaderboardCycleReset(remoteCycle)
+                    }
+                }
+            }
+        }
+
+        // Real-time 1-second 30-day leaderboard countdown ticker + auto-reset trigger on expiry
+        viewModelScope.launch {
+            _leaderboardCycle.collectLatest { cycle ->
+                if (cycle.effectiveNextResetAtMillis <= 0L) {
+                    _leaderboardNowMs.value = currentServerTimeMillis()
+                    return@collectLatest
+                }
+                while (true) {
+                    val now = currentServerTimeMillis()
+                    _leaderboardNowMs.value = now
+                    if (cycle.isDueForReset(now)) {
+                        triggerAutoLeaderboardCycleReset(cycle)
+                        break
+                    }
+                    val rem = cycle.remainingMillis(now)
+                    val nextDelayMs = if (rem <= 0L) 1000L else ((rem - 1L) % 1000L + 1L).coerceIn(100L, 1000L)
+                    delay(nextDelayMs)
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                FirebaseService.observeLeaderboardResetAt().catch { emit(0L) },
+                FirebaseRealtimeService.observeLeaderboardResetAtFromRTDB().catch { emit(0L) }
+            ) { fsResetTs, rtdbResetTs ->
+                maxOf(fsResetTs, rtdbResetTs)
+            }.catch { e ->
+                android.util.Log.w("MainViewModel", "Leaderboard reset observer flow error: ${e.message}")
+            }.collect { remoteResetAt ->
+                if (remoteResetAt > 0L && remoteResetAt > activeLeaderboardResetAt) {
+                    activeLeaderboardResetAt = remoteResetAt
+                    prefs.edit().putLong("last_handled_leaderboard_reset_at", remoteResetAt).apply()
+                    zeroLocalStudentXp()
+                    updateLeaderboard()
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                FirebaseService.observeAdminPricing().catch { emit(FirebaseService.AdminPricingConfig()) },
+                FirebaseRealtimeService.observeAdminPricingFromRTDB().catch { emit(null) }
+            ) { fsPricing, rtdbMap ->
+                val chat = rtdbMap?.get("liveChatPrice")?.toString()?.toIntOrNull()
+                    ?: rtdbMap?.get("live_chat_price")?.toString()?.toIntOrNull()
+                    ?: fsPricing.liveChatPrice
+                val sub = rtdbMap?.get("subscriptionPrice")?.toString()?.toIntOrNull()
+                    ?: rtdbMap?.get("subscription_price")?.toString()?.toIntOrNull()
+                    ?: fsPricing.subscriptionPrice
+                Pair(chat, sub)
+            }.catch { e ->
+                android.util.Log.w("MainViewModel", "Pricing observer flow error: ${e.message}")
+            }.collect { (chat, sub) ->
+                if (chat > 0) {
+                    _liveChatPrice.value = chat
+                    sessionPrefs.edit().putInt("admin_live_chat_price", chat).apply()
+                }
+                if (sub > 0) {
+                    _subscriptionPrice.value = sub
+                    sessionPrefs.edit().putInt("admin_subscription_price", sub).apply()
+                }
+            }
+        }
+
+        // Continuously observe statewide leaderboard across all students
+        leaderboardJob?.cancel()
+        leaderboardJob = viewModelScope.launch {
+            repository.leaderboard
+                .catch { e -> android.util.Log.w("MainViewModel", "Leaderboard flow error: ${e.message}") }
+                .collect { remoteEntries ->
+                    updateLeaderboard(remoteEntries)
+                }
+        }
+
+        updateLeaderboard()
+
+        val currentFbUser = try {
+            FirebaseService.auth.currentUser
+        } catch (_: Exception) {
+            null
+        }
+        val savedEmail = sessionPrefs.getString("user_email", "") ?: currentFbUser?.email ?: ""
+        val isAdminOrDemo = savedEmail.equals("ullassuvarna65@gmail.com", ignoreCase = true) ||
+                savedEmail.equals("karthik.kcet2026@gmail.com", ignoreCase = true) ||
+                sessionPrefs.getBoolean("is_admin", false) ||
+                !savedEmail.contains("@")
+
+        if (!isAdminOrDemo && currentFbUser != null) {
+            viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    currentFbUser.reload().awaitResult()
+                } catch (_: Exception) {}
+            }
+        }
+
+        val effectiveLoggedIn = sessionPrefs.getBoolean("is_logged_in", false)
+
+        if (effectiveLoggedIn || currentFbUser != null) {
+            val savedUid = sessionPrefs.getString("user_uid", null) ?: currentFbUser?.uid ?: ""
+            val savedEmailFinal = sessionPrefs.getString("user_email", null) ?: currentFbUser?.email ?: ""
+
+            if (savedUid.isNotBlank() || savedEmailFinal.isNotBlank()) {
+                startObservingUserData(savedUid, savedEmailFinal)
+
+                viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    try {
+                        val remoteXP = FirebaseService.getUserPointsOnce(savedUid, savedEmailFinal)
+                        if (remoteXP > _userPoints.value) {
+                            _userPoints.value = remoteXP
+                            sessionPrefs.edit().putInt("user_xp", remoteXP).putInt("user_xp_$savedUid", remoteXP).apply()
+                            _analyticsSummary.value = _analyticsSummary.value.copy(totalPoints = remoteXP)
+                            updateLeaderboard()
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    try {
+                        val isAdminSession = savedEmailFinal.trim().equals("ullassuvarna65@gmail.com", ignoreCase = true) ||
+                                savedUid == "admin_ullas" ||
+                                sessionPrefs.getBoolean("is_admin", false)
+                        if (!isAdminSession) {
+                            val blockCheck = FirebaseService.checkIfUserIsBlocked(savedUid)
+                            val emailCheck = if (savedEmailFinal.isNotBlank()) FirebaseService.checkIfUserIsBlocked(savedEmailFinal) else Pair(false, "")
+                            if (blockCheck.first || emailCheck.first) {
+                                val reason = if (blockCheck.first) blockCheck.second else emailCheck.second
+                                logout()
+                                _blockedAccountAlert.value = Pair(savedEmailFinal, reason.ifBlank { "Account blocked by Administrator." })
+                            } else {
+                                val remoteProfile = FirebaseService.getUserProfileOnce(savedUid)
+                                if (remoteProfile != null) {
+                                    if (remoteProfile.isBlocked) {
+                                        logout()
+                                        _blockedAccountAlert.value = Pair(savedEmailFinal, remoteProfile.blockReason.ifBlank { "Account blocked by Administrator." })
+                                    } else {
+                                        _userProfile.value = remoteProfile
+                                    }
+                                }
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+
+        // Clean up any historical KEA schedule update spam notifications from Firestore completely
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                FirebaseService.cleanupScheduleSpamNotifications()
+            } catch (_: Exception) {}
+        }
+
+        // Ensure welcome notification only appears on the very first session of opening the app
+        viewModelScope.launch {
+            delay(5000)
+            markWelcomeNotificationAsShown()
+        }
+
+        viewModelScope.launch {
+            userProfile.collect {
+                updateLeaderboard()
+            }
+        }
+
+        viewModelScope.launch {
+            userPoints.collect {
+                updateLeaderboard()
+            }
+        }
+
+        viewModelScope.launch {
+            try {
+                repository.cleanupDuplicateTestResults()
+            } catch (_: Exception) {}
+        }
+
+        viewModelScope.launch {
+            testResultsHistory
+                .catch { e -> android.util.Log.w("MainViewModel", "Test history flow error: ${e.message}") }
+                .collect { results ->
+                    val uniqueResults = getUniqueAttempts(results)
+                    if (uniqueResults.isNotEmpty()) {
+                        val totalCorrect = uniqueResults.sumOf { it.correctCount }
+                        val totalQs = uniqueResults.sumOf { it.totalQuestions }
+                        val calculatedAcc = if (totalQs > 0) (totalCorrect.toFloat() / totalQs) * 100f else 0f
+                        val currentXP = _userPoints.value
+                        val uid = _userProfile.value.uid
+                        _analyticsSummary.value = _analyticsSummary.value.copy(
+                            totalTestsTaken = maxOf(_analyticsSummary.value.totalTestsTaken, uniqueResults.size),
+                            overallAccuracy = if (calculatedAcc > 0f) calculatedAcc else _analyticsSummary.value.overallAccuracy,
+                            totalPoints = currentXP,
+                            avgTimePerQuestionSec = uniqueResults.map { it.timeTakenSeconds.toFloat() / it.totalQuestions }.average().toFloat()
+                        )
+                        updateLeaderboard()
+                        if (currentXP > 0 && (uid.isNotBlank() || _userProfile.value.email.isNotBlank())) {
+                            try {
+                                FirebaseService.updateLeaderboardEntry(
+                                    profile = _userProfile.value,
+                                    points = currentXP,
+                                    accuracy = calculatedAcc,
+                                    testsCount = uniqueResults.size
+                                )
+                            } catch (_: Exception) {}
+                        }
+                    } else {
+                        _analyticsSummary.value = _analyticsSummary.value.copy(
+                            totalPoints = _userPoints.value
+                        )
+                        updateLeaderboard()
+                    }
+                }
+        }
+
+        viewModelScope.launch {
+            allStudents
+                .catch { e -> android.util.Log.w("MainViewModel", "All students flow error: ${e.message}") }
+                .collect { studentsList ->
+                    val isAdmin = sessionPrefs.getBoolean("is_admin", false) ||
+                            _userProfile.value.email.equals("ullassuvarna65@gmail.com", ignoreCase = true) ||
+                            _userProfile.value.uid == "admin_ullas" ||
+                            (sessionPrefs.getString("user_email", "") ?: "").equals("ullassuvarna65@gmail.com", ignoreCase = true)
+                    val isMentor = _currentScreen.value == Screen.SENIOR_CHAT || _userProfile.value.email.equals("ullassuvarna85@gmail.com", ignoreCase = true) || registeredMentors.value.any { it.email.isNotBlank() && it.email.equals(_userProfile.value.email.trim(), ignoreCase = true) }
+                    if (_isLoggedIn.value && !isAdmin && !isMentor) {
+                        val me = _userProfile.value
+                        val match = studentsList.find { student ->
+                            student.uid.equals(me.uid, ignoreCase = true) ||
+                            (me.email.isNotBlank() && student.email.equals(me.email, ignoreCase = true)) ||
+                            (me.formattedStudentId.isNotBlank() && student.formattedStudentId.equals(me.formattedStudentId, ignoreCase = true))
+                        }
+                        if (match != null) {
+                            val override = FirebaseService.getPremiumOverride(me.uid)
+                                ?: (if (me.email.isNotBlank()) FirebaseService.getPremiumOverride(me.email) else null)
+                                ?: (if (me.formattedStudentId.isNotBlank()) FirebaseService.getPremiumOverride(me.formattedStudentId) else null)
+
+                            val targetPremium = when {
+                                override != null -> override
+                                match.isPremium -> true
+                                sessionPrefs.getBoolean("is_premium", false) -> true
+                                (me.uid.isNotBlank() && sessionPrefs.getBoolean("is_premium_${me.uid}", false)) -> true
+                                (me.email.isNotBlank() && sessionPrefs.getBoolean("is_premium_${me.email}", false)) -> true
+                                else -> me.isPremium
+                            }
+
+                            if (me.isPremium != targetPremium) {
+                                _userProfile.value = me.copy(isPremium = targetPremium)
+                                val editor = sessionPrefs.edit().putBoolean("is_premium", targetPremium)
+                                if (me.uid.isNotBlank()) editor.putBoolean("is_premium_${me.uid}", targetPremium)
+                                if (me.email.isNotBlank()) editor.putBoolean("is_premium_${me.email}", targetPremium)
+                                editor.apply()
+                                if (!targetPremium) {
+                                    _userBadges.value = defaultLockedBadges
+                                }
+                            }
+                        }
+                    }
+                }
+        }
+
+        val viewModelStartTime = System.currentTimeMillis()
+        val shownSystemNotificationIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+        viewModelScope.launch {
+            notifications
+                .catch { e -> android.util.Log.w("MainViewModel", "Notifications flow error: ${e.message}") }
+                .collect { notifList ->
+                    // Avoid showing old/historic notifications on app launch, only trigger system alert for new ones
+                    notifList.forEach { notif ->
+                        if (!notif.isRead &&
+                            notif.createdAtMillis >= viewModelStartTime - 10000 &&
+                            !shownSystemNotificationIds.contains(notif.id)
+                        ) {
+                            shownSystemNotificationIds.add(notif.id)
+                            try {
+                                DailyNotificationManager.showSystemNotification(
+                                    context = app,
+                                    title = notif.title,
+                                    message = notif.message,
+                                    channelId = if (notif.type == "ANNOUNCEMENT" || notif.type == "EXAM_ALERT") {
+                                        DailyNotificationManager.CHANNEL_INSTANT_ALERTS
+                                    } else {
+                                        DailyNotificationManager.CHANNEL_STUDY_UPDATES
+                                    }
+                                )
+                            } catch (e: Exception) {
+                                android.util.Log.e("MainViewModel", "Error showing real-time system notification: ${e.message}")
+                            }
+                        }
+                    }
+                }
+        }
+
+        // Start observation immediately if already logged in from saved session (only if not already started)
+        if (sessionPrefs.getBoolean("is_logged_in", false) && currentFbUser == null) {
+            val savedUid = sessionPrefs.getString("user_uid", "") ?: ""
+            val savedEmail = sessionPrefs.getString("user_email", "") ?: ""
+            if (savedUid.isNotBlank() || savedEmail.isNotBlank()) {
+                startObservingUserData(savedUid, savedEmail)
+            }
+        }
+
+        // Dynamically listen to Firebase Auth changes to safely trigger Realtime DB/Firestore observers
+        try {
+            FirebaseService.auth.addAuthStateListener { firebaseAuth ->
+                try {
+                    val firebaseUser = firebaseAuth.currentUser
+                    if (firebaseUser != null) {
+                        startObservingUserData(firebaseUser.uid, firebaseUser.email ?: "")
+                    } else {
+                        if (!sessionPrefs.getBoolean("is_logged_in", false)) {
+                            // Not authenticated in Firebase Auth and no saved session, cancel user-specific listeners
+                            profileJob?.cancel()
+                            testResultsJob?.cancel()
+                            paymentJob?.cancel()
+                            presenceJob?.cancel()
+                            liveXpJob?.cancel()
+                            realtimeNotifJob?.cancel()
+                            allOnlineJob?.cancel()
+                            allLiveXpJob?.cancel()
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
     }
 }
 

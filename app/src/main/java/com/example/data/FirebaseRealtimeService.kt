@@ -88,6 +88,51 @@ object FirebaseRealtimeService {
         FirebaseAuth.getInstance()
     }
 
+    private fun DataSnapshot.asSafeString(default: String = ""): String {
+        return try {
+            value?.toString() ?: default
+        } catch (_: Exception) {
+            default
+        }
+    }
+
+    private fun DataSnapshot.asSafeStringOrNull(): String? {
+        return try {
+            value?.toString()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun DataSnapshot.asSafeLong(default: Long = 0L): Long {
+        return try {
+            when (val raw = value) {
+                is Number -> raw.toLong()
+                is String -> raw.trim().toLongOrNull() ?: default
+                else -> default
+            }
+        } catch (_: Exception) {
+            default
+        }
+    }
+
+    private fun DataSnapshot.asSafeBoolean(): Boolean? {
+        return try {
+            when (val raw = value) {
+                is Boolean -> raw
+                is Number -> raw.toInt() == 1
+                is String -> when (raw.trim().lowercase()) {
+                    "true", "1", "yes" -> true
+                    "false", "0", "no" -> false
+                    else -> null
+                }
+                else -> null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     // ==========================================
     // 1. LEADERBOARD (Node: /leaderboard)
     // Rule: .read: auth != null, .write: false
@@ -335,17 +380,21 @@ object FirebaseRealtimeService {
 
         connectedRef.addValueEventListener(object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val connected = snapshot.getValue(Boolean::class.java) ?: false
-                if (connected) {
-                    val offlineMap = mapOf<String, Any>(
-                        "online" to false,
-                        "lastSeen" to ServerValue.TIMESTAMP,
-                        "userName" to userName.ifBlank { "Student" },
-                        "role" to role
-                    )
-                    userPresenceRef.onDisconnect().setValue(offlineMap)
-                    userPresenceRef.setValue(onlineMap)
-                    Log.d(TAG, "User presence connected set to online for UID: $uid")
+                try {
+                    val connected = snapshot.asSafeBoolean() ?: false
+                    if (connected) {
+                        val offlineMap = mapOf<String, Any>(
+                            "online" to false,
+                            "lastSeen" to ServerValue.TIMESTAMP,
+                            "userName" to userName.ifBlank { "Student" },
+                            "role" to role
+                        )
+                        userPresenceRef.onDisconnect().setValue(offlineMap)
+                        userPresenceRef.setValue(onlineMap)
+                        Log.d(TAG, "User presence connected set to online for UID: $uid")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error handling connected state: ${e.message}")
                 }
             }
 
@@ -363,15 +412,25 @@ object FirebaseRealtimeService {
             return@callbackFlow
         }
 
-        val presenceRef = database.getReference("presence/$uid")
+        val presenceRef = try {
+            database.getReference("presence/$uid")
+        } catch (e: Exception) {
+            trySend(UserPresence())
+            close()
+            return@callbackFlow
+        }
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val online = snapshot.child("online").getValue(Boolean::class.java) ?: false
-                val lastSeen = snapshot.child("lastSeen").getValue(Long::class.java) ?: System.currentTimeMillis()
-                val name = snapshot.child("userName").getValue(String::class.java) ?: "Student"
-                val role = snapshot.child("role").getValue(String::class.java) ?: "Student"
+                try {
+                    val online = snapshot.child("online").asSafeBoolean() ?: false
+                    val lastSeen = snapshot.child("lastSeen").asSafeLong(System.currentTimeMillis())
+                    val name = snapshot.child("userName").asSafeString("Student")
+                    val role = snapshot.child("role").asSafeString("Student")
 
-                trySend(UserPresence(uid = uid, userName = name, online = online, lastSeen = lastSeen, role = role))
+                    trySend(UserPresence(uid = uid, userName = name, online = online, lastSeen = lastSeen, role = role))
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing user presence: ${e.message}")
+                }
             }
 
             override fun onCancelled(error: DatabaseError) {
@@ -379,8 +438,12 @@ object FirebaseRealtimeService {
             }
         }
 
-        presenceRef.addValueEventListener(listener)
-        awaitClose { presenceRef.removeEventListener(listener) }
+        try {
+            presenceRef.addValueEventListener(listener)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to attach presence listener: ${e.message}")
+        }
+        awaitClose { try { presenceRef.removeEventListener(listener) } catch (_: Exception) {} }
     }
 
     fun observeAllOnlineUsers(): Flow<List<UserPresence>> = callbackFlow {
@@ -391,22 +454,32 @@ object FirebaseRealtimeService {
             return@callbackFlow
         }
 
-        val presenceRef = database.getReference("presence")
+        val presenceRef = try {
+            database.getReference("presence")
+        } catch (e: Exception) {
+            trySend(emptyList())
+            close()
+            return@callbackFlow
+        }
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val activeList = mutableListOf<UserPresence>()
-                for (child in snapshot.children) {
-                    val userUid = child.key ?: ""
-                    val online = child.child("online").getValue(Boolean::class.java) ?: false
-                    val lastSeen = child.child("lastSeen").getValue(Long::class.java) ?: System.currentTimeMillis()
-                    val name = child.child("userName").getValue(String::class.java) ?: "Student"
-                    val role = child.child("role").getValue(String::class.java) ?: "Student"
+                try {
+                    val activeList = mutableListOf<UserPresence>()
+                    for (child in snapshot.children) {
+                        val userUid = child.key ?: ""
+                        val online = child.child("online").asSafeBoolean() ?: false
+                        val lastSeen = child.child("lastSeen").asSafeLong(System.currentTimeMillis())
+                        val name = child.child("userName").asSafeString("Student")
+                        val role = child.child("role").asSafeString("Student")
 
-                    if (online) {
-                        activeList.add(UserPresence(uid = userUid, userName = name, online = true, lastSeen = lastSeen, role = role))
+                        if (online) {
+                            activeList.add(UserPresence(uid = userUid, userName = name, online = true, lastSeen = lastSeen, role = role))
+                        }
                     }
+                    trySend(activeList)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing online users: ${e.message}")
                 }
-                trySend(activeList)
             }
 
             override fun onCancelled(error: DatabaseError) {
@@ -414,8 +487,12 @@ object FirebaseRealtimeService {
             }
         }
 
-        presenceRef.addValueEventListener(listener)
-        awaitClose { presenceRef.removeEventListener(listener) }
+        try {
+            presenceRef.addValueEventListener(listener)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to attach all presence listener: ${e.message}")
+        }
+        awaitClose { try { presenceRef.removeEventListener(listener) } catch (_: Exception) {} }
     }
 
     // ==========================================
@@ -430,27 +507,37 @@ object FirebaseRealtimeService {
             return@callbackFlow
         }
 
-        val xpRef = database.getReference("liveXP/$uid")
+        val xpRef = try {
+            database.getReference("liveXP/$uid")
+        } catch (e: Exception) {
+            trySend(LiveXpData())
+            close()
+            return@callbackFlow
+        }
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val name = snapshot.child("userName").getValue(String::class.java) ?: "Student"
-                val xp = snapshot.child("xp").getValue(Long::class.java)?.toInt() ?: 0
-                val rank = snapshot.child("rank").getValue(Long::class.java)?.toInt() ?: 1
-                val targetRank = snapshot.child("targetRank").getValue(String::class.java) ?: "Under 1000"
-                val level = snapshot.child("level").getValue(Long::class.java)?.toInt() ?: 1
-                val updatedAt = snapshot.child("updatedAt").getValue(Long::class.java) ?: System.currentTimeMillis()
+                try {
+                    val name = snapshot.child("userName").asSafeString("Student")
+                    val xp = snapshot.child("xp").asSafeLong(0L).toInt()
+                    val rank = snapshot.child("rank").asSafeLong(1L).toInt()
+                    val targetRank = snapshot.child("targetRank").asSafeString("Under 1000")
+                    val level = snapshot.child("level").asSafeLong(1L).toInt()
+                    val updatedAt = snapshot.child("updatedAt").asSafeLong(System.currentTimeMillis())
 
-                trySend(
-                    LiveXpData(
-                        uid = uid,
-                        userName = name,
-                        xp = xp,
-                        rank = rank,
-                        targetRank = targetRank,
-                        level = level,
-                        updatedAt = updatedAt
+                    trySend(
+                        LiveXpData(
+                            uid = uid,
+                            userName = name,
+                            xp = xp,
+                            rank = rank,
+                            targetRank = targetRank,
+                            level = level,
+                            updatedAt = updatedAt
+                        )
                     )
-                )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing live XP: ${e.message}")
+                }
             }
 
             override fun onCancelled(error: DatabaseError) {
@@ -458,8 +545,12 @@ object FirebaseRealtimeService {
             }
         }
 
-        xpRef.addValueEventListener(listener)
-        awaitClose { xpRef.removeEventListener(listener) }
+        try {
+            xpRef.addValueEventListener(listener)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to attach live XP listener: ${e.message}")
+        }
+        awaitClose { try { xpRef.removeEventListener(listener) } catch (_: Exception) {} }
     }
 
     fun observeAllLiveXP(): Flow<Map<String, LiveXpData>> = callbackFlow {
@@ -470,30 +561,40 @@ object FirebaseRealtimeService {
             return@callbackFlow
         }
 
-        val xpRef = database.getReference("liveXP")
+        val xpRef = try {
+            database.getReference("liveXP")
+        } catch (e: Exception) {
+            trySend(emptyMap())
+            close()
+            return@callbackFlow
+        }
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val map = mutableMapOf<String, LiveXpData>()
-                for (child in snapshot.children) {
-                    val userUid = child.key ?: ""
-                    val name = child.child("userName").getValue(String::class.java) ?: "Student"
-                    val xp = child.child("xp").getValue(Long::class.java)?.toInt() ?: 0
-                    val rank = child.child("rank").getValue(Long::class.java)?.toInt() ?: 1
-                    val targetRank = child.child("targetRank").getValue(String::class.java) ?: "Under 1000"
-                    val level = child.child("level").getValue(Long::class.java)?.toInt() ?: 1
-                    val updatedAt = child.child("updatedAt").getValue(Long::class.java) ?: System.currentTimeMillis()
+                try {
+                    val map = mutableMapOf<String, LiveXpData>()
+                    for (child in snapshot.children) {
+                        val userUid = child.key ?: ""
+                        val name = child.child("userName").asSafeString("Student")
+                        val xp = child.child("xp").asSafeLong(0L).toInt()
+                        val rank = child.child("rank").asSafeLong(1L).toInt()
+                        val targetRank = child.child("targetRank").asSafeString("Under 1000")
+                        val level = child.child("level").asSafeLong(1L).toInt()
+                        val updatedAt = child.child("updatedAt").asSafeLong(System.currentTimeMillis())
 
-                    map[userUid] = LiveXpData(
-                        uid = userUid,
-                        userName = name,
-                        xp = xp,
-                        rank = rank,
-                        targetRank = targetRank,
-                        level = level,
-                        updatedAt = updatedAt
-                    )
+                        map[userUid] = LiveXpData(
+                            uid = userUid,
+                            userName = name,
+                            xp = xp,
+                            rank = rank,
+                            targetRank = targetRank,
+                            level = level,
+                            updatedAt = updatedAt
+                        )
+                    }
+                    trySend(map)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing all live XP: ${e.message}")
                 }
-                trySend(map)
             }
 
             override fun onCancelled(error: DatabaseError) {
@@ -501,8 +602,12 @@ object FirebaseRealtimeService {
             }
         }
 
-        xpRef.addValueEventListener(listener)
-        awaitClose { xpRef.removeEventListener(listener) }
+        try {
+            xpRef.addValueEventListener(listener)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to attach all live XP listener: ${e.message}")
+        }
+        awaitClose { try { xpRef.removeEventListener(listener) } catch (_: Exception) {} }
     }
 
     fun updateUserLiveXP(uid: String, userName: String, xp: Int, rank: Int, targetRank: String) {
@@ -945,17 +1050,22 @@ object FirebaseRealtimeService {
         val mentorsRef = database.getReference("registeredMentors")
         val mentorsListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val list = mutableListOf<SeniorMentorProfile>()
-                if (snapshot.exists()) {
-                    for (child in snapshot.children) {
-                        parseSeniorMentorFromSnapshot(child)?.let { list.add(it) }
+                try {
+                    val list = mutableListOf<SeniorMentorProfile>()
+                    if (snapshot.exists()) {
+                        for (child in snapshot.children) {
+                            parseSeniorMentorFromSnapshot(child)?.let { list.add(it) }
+                        }
+                        if (list.isEmpty()) {
+                            parseSeniorMentorFromSnapshot(snapshot)?.let { list.add(it) }
+                        }
                     }
-                    if (list.isEmpty()) {
-                        parseSeniorMentorFromSnapshot(snapshot)?.let { list.add(it) }
-                    }
+                    rtdbMentors = list
+                    emitMerged()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing mentors snapshot: ${e.message}")
+                    emitMerged()
                 }
-                rtdbMentors = list
-                emitMerged()
             }
 
             override fun onCancelled(error: DatabaseError) {
@@ -967,8 +1077,13 @@ object FirebaseRealtimeService {
         val profileRef = database.getReference("seniorMentorProfile")
         val profileListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                singleProfile = parseSeniorMentorFromSnapshot(snapshot)
-                emitMerged()
+                try {
+                    singleProfile = parseSeniorMentorFromSnapshot(snapshot)
+                    emitMerged()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing senior mentor profile: ${e.message}")
+                    emitMerged()
+                }
             }
 
             override fun onCancelled(error: DatabaseError) {
@@ -978,32 +1093,45 @@ object FirebaseRealtimeService {
         }
 
         fun attachDatabaseListeners() {
-            mentorsRef.addValueEventListener(mentorsListener)
-            profileRef.addValueEventListener(profileListener)
+            try {
+                mentorsRef.addValueEventListener(mentorsListener)
+                profileRef.addValueEventListener(profileListener)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed attaching mentor listeners: ${e.message}")
+            }
         }
 
         val authStateListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
-            if (firebaseAuth.currentUser != null) {
+            try {
+                if (firebaseAuth.currentUser != null) {
+                    attachDatabaseListeners()
+                } else {
+                    firebaseAuth.signInAnonymously().addOnSuccessListener {
+                        attachDatabaseListeners()
+                    }.addOnFailureListener {
+                        emitMerged()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Auth state listener error in mentors flow: ${e.message}")
+                emitMerged()
+            }
+        }
+
+        try {
+            auth.addAuthStateListener(authStateListener)
+            if (auth.currentUser != null) {
                 attachDatabaseListeners()
             } else {
-                firebaseAuth.signInAnonymously().addOnSuccessListener {
+                auth.signInAnonymously().addOnSuccessListener {
                     attachDatabaseListeners()
                 }.addOnFailureListener {
                     emitMerged()
                 }
             }
-        }
-
-        auth.addAuthStateListener(authStateListener)
-
-        if (auth.currentUser != null) {
-            attachDatabaseListeners()
-        } else {
-            auth.signInAnonymously().addOnSuccessListener {
-                attachDatabaseListeners()
-            }.addOnFailureListener {
-                emitMerged()
-            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Initial mentor listener setup error: ${e.message}")
+            emitMerged()
         }
 
         val fsJob = launch(Dispatchers.IO) {
@@ -1016,7 +1144,7 @@ object FirebaseRealtimeService {
         }
 
         awaitClose {
-            auth.removeAuthStateListener(authStateListener)
+            try { auth.removeAuthStateListener(authStateListener) } catch (_: Exception) {}
             try { mentorsRef.removeEventListener(mentorsListener) } catch (_: Exception) {}
             try { profileRef.removeEventListener(profileListener) } catch (_: Exception) {}
             fsJob.cancel()
@@ -1149,18 +1277,34 @@ object FirebaseRealtimeService {
     }
 
     fun observeAdminPinFromRTDB(): Flow<String?> = callbackFlow {
-        val ref = database.getReference("admin_config").child("pin")
+        val ref = try {
+            database.getReference("admin_config").child("pin")
+        } catch (e: Exception) {
+            trySend(null)
+            close()
+            return@callbackFlow
+        }
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val pinVal = snapshot.getValue(String::class.java) ?: snapshot.value?.toString()
-                trySend(pinVal)
+                try {
+                    val pinVal = snapshot.asSafeStringOrNull()?.trim()
+                    trySend(pinVal)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error reading admin PIN from RTDB: ${e.message}")
+                    trySend(null)
+                }
             }
             override fun onCancelled(error: DatabaseError) {
                 trySend(null)
             }
         }
-        ref.addValueEventListener(listener)
-        awaitClose { ref.removeEventListener(listener) }
+        try {
+            ref.addValueEventListener(listener)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching admin PIN listener: ${e.message}")
+            trySend(null)
+        }
+        awaitClose { try { ref.removeEventListener(listener) } catch (_: Exception) {} }
     }
 
     fun deleteNotificationPermanently(id: String) {
@@ -1173,24 +1317,40 @@ object FirebaseRealtimeService {
     }
 
     fun observeGloballyDeletedNotificationIds(): Flow<Set<String>> = callbackFlow {
-        val ref = database.getReference("globallyDeletedNotifications")
+        val ref = try {
+            database.getReference("globallyDeletedNotifications")
+        } catch (e: Exception) {
+            trySend(emptySet())
+            close()
+            return@callbackFlow
+        }
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val set = mutableSetOf<String>()
-                for (child in snapshot.children) {
-                    val key = child.key
-                    if (!key.isNullOrBlank()) {
-                        set.add(key)
+                try {
+                    val set = mutableSetOf<String>()
+                    for (child in snapshot.children) {
+                        val key = child.key
+                        if (!key.isNullOrBlank()) {
+                            set.add(key)
+                        }
                     }
+                    trySend(set)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing globally deleted notification IDs: ${e.message}")
+                    trySend(emptySet())
                 }
-                trySend(set)
             }
             override fun onCancelled(error: DatabaseError) {
                 trySend(emptySet())
             }
         }
-        ref.addValueEventListener(listener)
-        awaitClose { ref.removeEventListener(listener) }
+        try {
+            ref.addValueEventListener(listener)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching deleted notification IDs listener: ${e.message}")
+            trySend(emptySet())
+        }
+        awaitClose { try { ref.removeEventListener(listener) } catch (_: Exception) {} }
     }
 
     fun saveAdminPricingToRTDB(liveChatPrice: Int, subscriptionPrice: Int) {
@@ -1207,18 +1367,35 @@ object FirebaseRealtimeService {
     }
 
     fun observeAdminPricingFromRTDB(): Flow<Map<String, Any>?> = callbackFlow {
-        val ref = database.getReference("admin_config").child("pricing")
+        val ref = try {
+            database.getReference("admin_config").child("pricing")
+        } catch (e: Exception) {
+            trySend(null)
+            close()
+            return@callbackFlow
+        }
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val value = snapshot.value as? Map<String, Any>
-                trySend(value)
+                try {
+                    @Suppress("UNCHECKED_CAST")
+                    val value = snapshot.value as? Map<String, Any>
+                    trySend(value)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing admin pricing from RTDB: ${e.message}")
+                    trySend(null)
+                }
             }
             override fun onCancelled(error: DatabaseError) {
                 trySend(null)
             }
         }
-        ref.addValueEventListener(listener)
-        awaitClose { ref.removeEventListener(listener) }
+        try {
+            ref.addValueEventListener(listener)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching admin pricing listener: ${e.message}")
+            trySend(null)
+        }
+        awaitClose { try { ref.removeEventListener(listener) } catch (_: Exception) {} }
     }
 
     private suspend fun <T> com.google.android.gms.tasks.Task<T>.awaitSafe(): T? {
@@ -1265,30 +1442,46 @@ object FirebaseRealtimeService {
     )
 
     fun observeSystemSecurityKeyFromRTDB(): Flow<RtdbSecurityKeySnapshot?> = callbackFlow {
-        val ref = database.getReference("admin_config")
+        val ref = try {
+            database.getReference("admin_config")
+        } catch (e: Exception) {
+            trySend(null)
+            close()
+            return@callbackFlow
+        }
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val secKey = snapshot.child("securityKey").value?.toString()?.trim()
-                val pin = snapshot.child("pin").value?.toString()?.trim()
-                val updatedAt = snapshot.child("securityKeyUpdatedAtMillis").getValue(Long::class.java) ?: 0L
-                trySend(RtdbSecurityKeySnapshot(securityKey = secKey, pin = pin, updatedAtMillis = updatedAt))
+                try {
+                    val secKey = snapshot.child("securityKey").asSafeStringOrNull()?.trim()
+                    val pin = snapshot.child("pin").asSafeStringOrNull()?.trim()
+                    val updatedAt = snapshot.child("securityKeyUpdatedAtMillis").asSafeLong(0L)
+                    trySend(RtdbSecurityKeySnapshot(securityKey = secKey, pin = pin, updatedAtMillis = updatedAt))
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing RTDB security key: ${e.message}")
+                    trySend(null)
+                }
             }
 
             override fun onCancelled(error: DatabaseError) {
                 trySend(null)
             }
         }
-        ref.addValueEventListener(listener)
-        awaitClose { ref.removeEventListener(listener) }
+        try {
+            ref.addValueEventListener(listener)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching security key listener: ${e.message}")
+            trySend(null)
+        }
+        awaitClose { try { ref.removeEventListener(listener) } catch (_: Exception) {} }
     }
 
     suspend fun getSystemSecurityKeyOnceFromRTDB(): RtdbSecurityKeySnapshot? {
         return try {
             val snapshot = database.getReference("admin_config").get().awaitSafe() ?: return null
             if (!snapshot.exists()) return null
-            val secKey = snapshot.child("securityKey").value?.toString()?.trim()
-            val pin = snapshot.child("pin").value?.toString()?.trim()
-            val updatedAt = snapshot.child("securityKeyUpdatedAtMillis").getValue(Long::class.java) ?: 0L
+            val secKey = snapshot.child("securityKey").asSafeStringOrNull()?.trim()
+            val pin = snapshot.child("pin").asSafeStringOrNull()?.trim()
+            val updatedAt = snapshot.child("securityKeyUpdatedAtMillis").asSafeLong(0L)
             RtdbSecurityKeySnapshot(securityKey = secKey, pin = pin, updatedAtMillis = updatedAt)
         } catch (e: Exception) {
             Log.w(TAG, "Error reading RTDB security key: ${e.message}")
@@ -1318,28 +1511,39 @@ object FirebaseRealtimeService {
     }
 
     fun observeSystemShutdownFromRTDB(): Flow<SystemControlConfig.SystemShutdownStatus?> = callbackFlow {
-        val ref = database.getReference("admin_config")
+        val ref = try {
+            database.getReference("admin_config")
+        } catch (e: Exception) {
+            trySend(null)
+            close()
+            return@callbackFlow
+        }
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                if (!snapshot.exists()) {
-                    trySend(null)
-                    return
-                }
-                val statusNode = snapshot.child("systemStatus")
-                val boolDirect = snapshot.child("systemShutdown").getValue(Boolean::class.java)
-                val statusBool = statusNode.child("isShutdown").getValue(Boolean::class.java)
-                val updatedAt = statusNode.child("updatedAtMillis").getValue(Long::class.java) ?: 0L
-                val updatedBy = statusNode.child("updatedBy").getValue(String::class.java) ?: ""
-                val effectiveBool = statusBool ?: boolDirect
-                if (effectiveBool != null) {
-                    trySend(
-                        SystemControlConfig.SystemShutdownStatus(
-                            isShutdown = effectiveBool,
-                            updatedAtMillis = updatedAt,
-                            updatedBy = updatedBy
+                try {
+                    if (!snapshot.exists()) {
+                        trySend(null)
+                        return
+                    }
+                    val statusNode = snapshot.child("systemStatus")
+                    val boolDirect = snapshot.child("systemShutdown").asSafeBoolean()
+                    val statusBool = statusNode.child("isShutdown").asSafeBoolean()
+                    val updatedAt = statusNode.child("updatedAtMillis").asSafeLong(0L)
+                    val updatedBy = statusNode.child("updatedBy").asSafeString("")
+                    val effectiveBool = statusBool ?: boolDirect
+                    if (effectiveBool != null) {
+                        trySend(
+                            SystemControlConfig.SystemShutdownStatus(
+                                isShutdown = effectiveBool,
+                                updatedAtMillis = updatedAt,
+                                updatedBy = updatedBy
+                            )
                         )
-                    )
-                } else {
+                    } else {
+                        trySend(null)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing RTDB system shutdown status: ${e.message}")
                     trySend(null)
                 }
             }
@@ -1348,37 +1552,145 @@ object FirebaseRealtimeService {
                 trySend(null)
             }
         }
-        ref.addValueEventListener(listener)
-        awaitClose { ref.removeEventListener(listener) }
+        try {
+            ref.addValueEventListener(listener)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching RTDB system shutdown listener: ${e.message}")
+            trySend(null)
+        }
+        awaitClose { try { ref.removeEventListener(listener) } catch (_: Exception) {} }
     }
 
     suspend fun saveLeaderboardResetAtToRTDB(resetAtMillis: Long) {
         try {
+            val nextResetAt = resetAtMillis + SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS
+            val updates = mapOf<String, Any>(
+                "leaderboardResetAt" to resetAtMillis,
+                "leaderboardCycleStartAt" to resetAtMillis,
+                "leaderboardNextResetAt" to nextResetAt
+            )
             database.getReference("admin_config")
-                .child("leaderboardResetAt")
-                .setValue(resetAtMillis)
+                .updateChildren(updates)
                 .awaitSafe()
         } catch (e: Exception) {
             Log.w(TAG, "Error saving leaderboardResetAt to RTDB: ${e.message}")
         }
     }
 
-    fun observeLeaderboardResetAtFromRTDB(): Flow<Long> = callbackFlow {
-        val ref = database.getReference("admin_config").child("leaderboardResetAt")
+    suspend fun saveLeaderboardCycleToRTDB(cycle: SystemControlConfig.LeaderboardCycleStatus) {
+        try {
+            val updates = mutableMapOf<String, Any>(
+                "leaderboardCycleStartAt" to cycle.effectiveCycleStartAtMillis,
+                "leaderboardNextResetAt" to cycle.effectiveNextResetAtMillis
+            )
+            if (cycle.lastResetAtMillis > 0L) {
+                updates["leaderboardResetAt"] = cycle.lastResetAtMillis
+            }
+            database.getReference("admin_config")
+                .updateChildren(updates)
+                .awaitSafe()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error saving leaderboard cycle to RTDB: ${e.message}")
+        }
+    }
+
+    suspend fun getLeaderboardCycleOnceFromRTDB(): SystemControlConfig.LeaderboardCycleStatus? {
+        return try {
+            val snapshot = database.getReference("admin_config").get().awaitSafe() ?: return null
+            if (!snapshot.exists()) return null
+            val resetAt = snapshot.child("leaderboardResetAt").asSafeLong(0L)
+            val cycleStart = snapshot.child("leaderboardCycleStartAt").asSafeLong(0L)
+            val nextReset = snapshot.child("leaderboardNextResetAt").asSafeLong(0L)
+            if (resetAt <= 0L && cycleStart <= 0L && nextReset <= 0L) return null
+            SystemControlConfig.LeaderboardCycleStatus(
+                lastResetAtMillis = resetAt,
+                cycleStartAtMillis = if (cycleStart > 0L) cycleStart else resetAt,
+                nextResetAtMillis = if (nextReset > 0L) nextReset else (if (resetAt > 0L) resetAt + SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS else 0L)
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Error reading RTDB leaderboard cycle: ${e.message}")
+            null
+        }
+    }
+
+    fun observeLeaderboardCycleFromRTDB(): Flow<SystemControlConfig.LeaderboardCycleStatus?> = callbackFlow {
+        val ref = try {
+            database.getReference("admin_config")
+        } catch (e: Exception) {
+            trySend(null)
+            close()
+            return@callbackFlow
+        }
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val ts = snapshot.getValue(Long::class.java)
-                    ?: snapshot.value?.toString()?.toLongOrNull()
-                    ?: 0L
-                trySend(ts)
+                try {
+                    if (!snapshot.exists()) {
+                        trySend(null)
+                        return
+                    }
+                    val resetAt = snapshot.child("leaderboardResetAt").asSafeLong(0L)
+                    val cycleStart = snapshot.child("leaderboardCycleStartAt").asSafeLong(0L)
+                    val nextReset = snapshot.child("leaderboardNextResetAt").asSafeLong(0L)
+                    if (resetAt <= 0L && cycleStart <= 0L && nextReset <= 0L) {
+                        trySend(null)
+                        return
+                    }
+                    trySend(
+                        SystemControlConfig.LeaderboardCycleStatus(
+                            lastResetAtMillis = resetAt,
+                            cycleStartAtMillis = if (cycleStart > 0L) cycleStart else resetAt,
+                            nextResetAtMillis = if (nextReset > 0L) nextReset else (if (resetAt > 0L) resetAt + SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS else 0L)
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing leaderboard cycle from RTDB: ${e.message}")
+                    trySend(null)
+                }
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                trySend(null)
+            }
+        }
+        try {
+            ref.addValueEventListener(listener)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching leaderboard cycle listener: ${e.message}")
+            trySend(null)
+        }
+        awaitClose { try { ref.removeEventListener(listener) } catch (_: Exception) {} }
+    }
+
+    fun observeLeaderboardResetAtFromRTDB(): Flow<Long> = callbackFlow {
+        val ref = try {
+            database.getReference("admin_config").child("leaderboardResetAt")
+        } catch (e: Exception) {
+            trySend(0L)
+            close()
+            return@callbackFlow
+        }
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                try {
+                    val ts = snapshot.asSafeLong(0L)
+                    trySend(ts)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing leaderboardResetAt from RTDB: ${e.message}")
+                    trySend(0L)
+                }
             }
 
             override fun onCancelled(error: DatabaseError) {
                 trySend(0L)
             }
         }
-        ref.addValueEventListener(listener)
-        awaitClose { ref.removeEventListener(listener) }
+        try {
+            ref.addValueEventListener(listener)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching leaderboardResetAt listener: ${e.message}")
+            trySend(0L)
+        }
+        awaitClose { try { ref.removeEventListener(listener) } catch (_: Exception) {} }
     }
 
     suspend fun resetAllLeaderboardXpInRTDB(resetAtMillis: Long = System.currentTimeMillis()): Boolean {
@@ -1408,6 +1720,9 @@ object FirebaseRealtimeService {
             }
 
             batchUpdates["admin_config/leaderboardResetAt"] = resetAtMillis
+            batchUpdates["admin_config/leaderboardCycleStartAt"] = resetAtMillis
+            batchUpdates["admin_config/leaderboardNextResetAt"] =
+                resetAtMillis + SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS
 
             if (batchUpdates.isNotEmpty()) {
                 database.reference.updateChildren(batchUpdates).awaitSafe()
@@ -1423,67 +1738,83 @@ object FirebaseRealtimeService {
     // APP-WIDE MAINTENANCE MODE & SERVER TIME OFFSET (RTDB)
     // -------------------------------------------------------------
     fun observeServerTimeOffsetMs(): Flow<Long> = callbackFlow {
-        val offsetRef = database.getReference(".info/serverTimeOffset")
+        val offsetRef = try {
+            database.getReference(".info/serverTimeOffset")
+        } catch (e: Exception) {
+            trySend(0L)
+            close()
+            return@callbackFlow
+        }
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val offset = when (val raw = snapshot.value) {
-                    is Number -> raw.toLong()
-                    is String -> raw.toLongOrNull() ?: 0L
-                    else -> 0L
+                try {
+                    val offset = snapshot.asSafeLong(0L)
+                    trySend(offset)
+                } catch (e: Exception) {
+                    trySend(0L)
                 }
-                trySend(offset)
             }
 
             override fun onCancelled(error: DatabaseError) {
                 trySend(0L)
             }
         }
-        offsetRef.addValueEventListener(listener)
-        awaitClose { offsetRef.removeEventListener(listener) }
+        try {
+            offsetRef.addValueEventListener(listener)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching server time offset listener: ${e.message}")
+            trySend(0L)
+        }
+        awaitClose { try { offsetRef.removeEventListener(listener) } catch (_: Exception) {} }
     }
 
     fun observeMaintenanceConfigFromRTDB(): Flow<MaintenanceConfig?> = callbackFlow {
-        val ref = database.getReference("admin_config").child("maintenance")
+        val ref = try {
+            database.getReference("admin_config").child("maintenance")
+        } catch (e: Exception) {
+            trySend(null)
+            close()
+            return@callbackFlow
+        }
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                if (!snapshot.exists()) {
-                    trySend(null)
-                    return
-                }
-                val enabled = when (val raw = snapshot.child("maintenanceEnabled").value) {
-                    is Boolean -> raw
-                    is Number -> raw.toInt() == 1
-                    is String -> raw.equals("true", ignoreCase = true)
-                    else -> false
-                }
-                val startTime = (snapshot.child("maintenanceStartTime").value as? Number)?.toLong()
-                    ?: snapshot.child("maintenanceStartTime").value?.toString()?.toLongOrNull()
-                    ?: 0L
-                val endTime = (snapshot.child("maintenanceEndTime").value as? Number)?.toLong()
-                    ?: snapshot.child("maintenanceEndTime").value?.toString()?.toLongOrNull()
-                    ?: 0L
-                val updatedAt = (snapshot.child("updatedAt").value as? Number)?.toLong()
-                    ?: snapshot.child("updatedAt").value?.toString()?.toLongOrNull()
-                    ?: 0L
-                val updatedBy = snapshot.child("updatedBy").value?.toString().orEmpty()
+                try {
+                    if (!snapshot.exists()) {
+                        trySend(null)
+                        return
+                    }
+                    val enabled = snapshot.child("maintenanceEnabled").asSafeBoolean() ?: false
+                    val startTime = snapshot.child("maintenanceStartTime").asSafeLong(0L)
+                    val endTime = snapshot.child("maintenanceEndTime").asSafeLong(0L)
+                    val updatedAt = snapshot.child("updatedAt").asSafeLong(0L)
+                    val updatedBy = snapshot.child("updatedBy").asSafeString("")
 
-                trySend(
-                    MaintenanceConfig(
-                        maintenanceEnabled = enabled,
-                        maintenanceStartTime = startTime,
-                        maintenanceEndTime = endTime,
-                        updatedAt = updatedAt,
-                        updatedBy = updatedBy
+                    trySend(
+                        MaintenanceConfig(
+                            maintenanceEnabled = enabled,
+                            maintenanceStartTime = startTime,
+                            maintenanceEndTime = endTime,
+                            updatedAt = updatedAt,
+                            updatedBy = updatedBy
+                        )
                     )
-                )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing RTDB maintenance config: ${e.message}")
+                    trySend(null)
+                }
             }
 
             override fun onCancelled(error: DatabaseError) {
                 trySend(null)
             }
         }
-        ref.addValueEventListener(listener)
-        awaitClose { ref.removeEventListener(listener) }
+        try {
+            ref.addValueEventListener(listener)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching RTDB maintenance listener: ${e.message}")
+            trySend(null)
+        }
+        awaitClose { try { ref.removeEventListener(listener) } catch (_: Exception) {} }
     }
 
     suspend fun saveMaintenanceConfigToRTDB(config: MaintenanceConfig): Boolean {

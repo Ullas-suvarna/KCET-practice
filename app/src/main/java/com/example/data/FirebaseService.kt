@@ -94,7 +94,7 @@ object FirebaseService {
 
     fun extractBoolean(doc: com.google.firebase.firestore.DocumentSnapshot, vararg fieldNames: String): Boolean? {
         for (field in fieldNames) {
-            val raw = doc.get(field) ?: continue
+            val raw = try { doc.get(field) } catch (_: Exception) { null } ?: continue
             val bool = when (raw) {
                 is Boolean -> raw
                 is Number -> raw.toInt() == 1
@@ -106,6 +106,30 @@ object FirebaseService {
                 else -> null
             }
             if (bool != null) return bool
+        }
+        return null
+    }
+
+    private fun extractString(doc: com.google.firebase.firestore.DocumentSnapshot, vararg fieldNames: String): String? {
+        for (field in fieldNames) {
+            val raw = try { doc.get(field) } catch (_: Exception) { null } ?: continue
+            val str = raw.toString()
+            if (str.isNotBlank()) return str
+        }
+        return null
+    }
+
+    private fun extractMillis(doc: com.google.firebase.firestore.DocumentSnapshot, vararg fieldNames: String): Long? {
+        for (field in fieldNames) {
+            val raw = try { doc.get(field) } catch (_: Exception) { null } ?: continue
+            val parsed = when (raw) {
+                is Number -> raw.toLong()
+                is com.google.firebase.Timestamp -> raw.toDate().time
+                is java.util.Date -> raw.time
+                is String -> raw.trim().toLongOrNull()
+                else -> null
+            }
+            if (parsed != null) return parsed
         }
         return null
     }
@@ -3260,16 +3284,27 @@ object FirebaseService {
     }
 
     fun observeGloballyDeletedNotificationIds(): Flow<Set<String>> = callbackFlow {
-        val query = firestore.collection("globally_deleted_notifications")
-        val listener = query.addSnapshotListener { snapshot, error ->
-            if (error != null || snapshot == null) {
-                trySend(emptySet())
-                return@addSnapshotListener
+        val listener = try {
+            val query = firestore.collection("globally_deleted_notifications")
+            query.addSnapshotListener { snapshot, error ->
+                try {
+                    if (error != null || snapshot == null) {
+                        trySend(emptySet())
+                        return@addSnapshotListener
+                    }
+                    val ids = snapshot.documents.map { it.id }.toSet()
+                    trySend(ids)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing globally deleted notifications: ${e.message}")
+                    trySend(emptySet())
+                }
             }
-            val ids = snapshot.documents.map { it.id }.toSet()
-            trySend(ids)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching globally deleted notifications listener: ${e.message}")
+            trySend(emptySet())
+            null
         }
-        awaitClose { listener.remove() }
+        awaitClose { try { listener?.remove() } catch (_: Exception) {} }
     }
 
     suspend fun cleanupScheduleSpamNotifications() {
@@ -3296,26 +3331,41 @@ object FirebaseService {
     // 7. IMPORTANT DATES & SCHEDULE COLLECTION
     // -------------------------------------------------------------
     fun observeImportantDates(): Flow<List<ImportantDateItem>> = callbackFlow {
-        val query = firestore.collection("important_dates")
-        val listener = query.addSnapshotListener { snapshot, error ->
-            if (error != null || snapshot == null || snapshot.isEmpty) {
-                trySend(SampleData.sampleImportantDates)
-                return@addSnapshotListener
+        val listener = try {
+            val query = firestore.collection("important_dates")
+            query.addSnapshotListener { snapshot, error ->
+                try {
+                    if (error != null || snapshot == null || snapshot.isEmpty) {
+                        trySend(SampleData.sampleImportantDates)
+                        return@addSnapshotListener
+                    }
+                    val items = snapshot.documents.mapNotNull { doc ->
+                        try {
+                            ImportantDateItem(
+                                id = extractString(doc, "id") ?: doc.id,
+                                eventTitle = extractString(doc, "eventTitle") ?: "",
+                                dateOrDeadline = extractString(doc, "dateOrDeadline") ?: "",
+                                status = extractString(doc, "status") ?: "Upcoming",
+                                description = extractString(doc, "description") ?: "",
+                                category = extractString(doc, "category") ?: "Exam",
+                                isHighlighted = extractBoolean(doc, "isHighlighted") ?: false
+                            )
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                    trySend(if (items.isNotEmpty()) items else SampleData.sampleImportantDates)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing important dates: ${e.message}")
+                    trySend(SampleData.sampleImportantDates)
+                }
             }
-            val items = snapshot.documents.mapNotNull { doc ->
-                ImportantDateItem(
-                    id = doc.getString("id") ?: doc.id,
-                    eventTitle = doc.getString("eventTitle") ?: "",
-                    dateOrDeadline = doc.getString("dateOrDeadline") ?: "",
-                    status = doc.getString("status") ?: "Upcoming",
-                    description = doc.getString("description") ?: "",
-                    category = doc.getString("category") ?: "Exam",
-                    isHighlighted = doc.getBoolean("isHighlighted") ?: false
-                )
-            }
-            trySend(if (items.isNotEmpty()) items else SampleData.sampleImportantDates)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching important dates listener: ${e.message}")
+            trySend(SampleData.sampleImportantDates)
+            null
         }
-        awaitClose { listener.remove() }
+        awaitClose { try { listener?.remove() } catch (_: Exception) {} }
     }
 
     suspend fun saveImportantDate(item: ImportantDateItem) {
@@ -4512,32 +4562,35 @@ object FirebaseService {
     const val DEFAULT_ADMIN_PIN = "17082006"
 
     fun observeAdminPin(): Flow<String> = callbackFlow {
-        val docRef = firestore.collection("admin_config").document("security")
-        val listener = docRef.addSnapshotListener { snapshot, error ->
-            if (error != null || snapshot == null || !snapshot.exists()) {
-                trySend(DEFAULT_ADMIN_PIN)
-                return@addSnapshotListener
+        val listener = try {
+            val docRef = firestore.collection("admin_config").document("security")
+            docRef.addSnapshotListener { snapshot, error ->
+                try {
+                    if (error != null || snapshot == null || !snapshot.exists()) {
+                        trySend(DEFAULT_ADMIN_PIN)
+                        return@addSnapshotListener
+                    }
+                    val remotePin = extractString(snapshot, "pin", "admin_pin", "password")
+                    val effectivePin = if (!remotePin.isNullOrBlank()) remotePin.trim() else DEFAULT_ADMIN_PIN
+                    trySend(effectivePin)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing admin PIN: ${e.message}")
+                    trySend(DEFAULT_ADMIN_PIN)
+                }
             }
-            val remotePin = snapshot.getString("pin")
-                ?: snapshot.get("pin")?.toString()
-                ?: snapshot.getString("admin_pin")
-                ?: snapshot.get("admin_pin")?.toString()
-                ?: snapshot.getString("password")
-            val effectivePin = if (!remotePin.isNullOrBlank()) remotePin.trim() else DEFAULT_ADMIN_PIN
-            trySend(effectivePin)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching admin PIN listener: ${e.message}")
+            trySend(DEFAULT_ADMIN_PIN)
+            null
         }
-        awaitClose { listener.remove() }
+        awaitClose { try { listener?.remove() } catch (_: Exception) {} }
     }
 
     suspend fun getAdminPin(): String {
         return try {
             val snapshot = firestore.collection("admin_config").document("security").get().awaitResult().getOrNull()
             if (snapshot != null && snapshot.exists()) {
-                val remotePin = snapshot.getString("pin")
-                    ?: snapshot.get("pin")?.toString()
-                    ?: snapshot.getString("admin_pin")
-                    ?: snapshot.get("admin_pin")?.toString()
-                    ?: snapshot.getString("password")
+                val remotePin = extractString(snapshot, "pin", "admin_pin", "password")
                 if (!remotePin.isNullOrBlank()) {
                     return remotePin.trim()
                 }
@@ -4557,17 +4610,28 @@ object FirebaseService {
     )
 
     fun observeAdminPricing(): Flow<AdminPricingConfig> = callbackFlow {
-        val docRef = firestore.collection("admin_config").document("pricing")
-        val listener = docRef.addSnapshotListener { snapshot, error ->
-            if (error != null || snapshot == null || !snapshot.exists()) {
-                trySend(AdminPricingConfig(50, 299))
-                return@addSnapshotListener
+        val listener = try {
+            val docRef = firestore.collection("admin_config").document("pricing")
+            docRef.addSnapshotListener { snapshot, error ->
+                try {
+                    if (error != null || snapshot == null || !snapshot.exists()) {
+                        trySend(AdminPricingConfig(50, 299))
+                        return@addSnapshotListener
+                    }
+                    val chatPrice = extractInt(snapshot.get("liveChatPrice") ?: snapshot.get("live_chat_price") ?: snapshot.get("chatPrice")) ?: 50
+                    val subPrice = extractInt(snapshot.get("subscriptionPrice") ?: snapshot.get("subscription_price") ?: snapshot.get("subPrice")) ?: 299
+                    trySend(AdminPricingConfig(chatPrice, subPrice))
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing admin pricing: ${e.message}")
+                    trySend(AdminPricingConfig(50, 299))
+                }
             }
-            val chatPrice = extractInt(snapshot.get("liveChatPrice") ?: snapshot.get("live_chat_price") ?: snapshot.get("chatPrice")) ?: 50
-            val subPrice = extractInt(snapshot.get("subscriptionPrice") ?: snapshot.get("subscription_price") ?: snapshot.get("subPrice")) ?: 299
-            trySend(AdminPricingConfig(chatPrice, subPrice))
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching admin pricing listener: ${e.message}")
+            trySend(AdminPricingConfig(50, 299))
+            null
         }
-        awaitClose { listener.remove() }
+        awaitClose { try { listener?.remove() } catch (_: Exception) {} }
     }
 
     suspend fun saveAdminPricing(liveChatPrice: Int, subscriptionPrice: Int) {
@@ -4627,32 +4691,35 @@ object FirebaseService {
     }
 
     fun observeFirestoreSecurityKeySnapshot(): Flow<SystemControlConfig.RemoteSecurityKeySnapshot?> = callbackFlow {
-        val docRef = firestore.collection("admin_config").document("security")
-        val listener = docRef.addSnapshotListener { snapshot, error ->
-            if (error != null || snapshot == null || !snapshot.exists()) {
-                trySend(null)
-                return@addSnapshotListener
+        val listener = try {
+            val docRef = firestore.collection("admin_config").document("security")
+            docRef.addSnapshotListener { snapshot, error ->
+                try {
+                    if (error != null || snapshot == null || !snapshot.exists()) {
+                        trySend(null)
+                        return@addSnapshotListener
+                    }
+                    val secKey = extractString(snapshot, "securityKey", "security_key")?.trim()
+                    val pin = extractString(snapshot, "pin", "admin_pin")?.trim()
+                    val updatedAt = extractMillis(snapshot, "securityKeyUpdatedAtMillis", "updatedAtMillis") ?: 0L
+                    trySend(
+                        SystemControlConfig.RemoteSecurityKeySnapshot(
+                            securityKey = secKey,
+                            pin = pin,
+                            updatedAtMillis = updatedAt
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing security key snapshot: ${e.message}")
+                    trySend(null)
+                }
             }
-            val secKey = (snapshot.getString("securityKey")
-                ?: snapshot.get("securityKey")?.toString()
-                ?: snapshot.getString("security_key")
-                ?: snapshot.get("security_key")?.toString())?.trim()
-            val pin = (snapshot.getString("pin")
-                ?: snapshot.get("pin")?.toString()
-                ?: snapshot.getString("admin_pin")
-                ?: snapshot.get("admin_pin")?.toString())?.trim()
-            val updatedAt = snapshot.getLong("securityKeyUpdatedAtMillis")
-                ?: snapshot.getLong("updatedAtMillis")
-                ?: 0L
-            trySend(
-                SystemControlConfig.RemoteSecurityKeySnapshot(
-                    securityKey = secKey,
-                    pin = pin,
-                    updatedAtMillis = updatedAt
-                )
-            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching security key listener: ${e.message}")
+            trySend(null)
+            null
         }
-        awaitClose { listener.remove() }
+        awaitClose { try { listener?.remove() } catch (_: Exception) {} }
     }
 
     suspend fun getEffectiveSystemSecurityKeyOnce(fallbackCachedKey: String? = null): String {
@@ -4660,17 +4727,9 @@ object FirebaseService {
             withTimeoutOrNull(4500L) {
                 val snapshot = firestore.collection("admin_config").document("security").get().awaitResult().getOrNull()
                 if (snapshot != null && snapshot.exists()) {
-                    val secKey = (snapshot.getString("securityKey")
-                        ?: snapshot.get("securityKey")?.toString()
-                        ?: snapshot.getString("security_key")
-                        ?: snapshot.get("security_key")?.toString())?.trim()
-                    val pin = (snapshot.getString("pin")
-                        ?: snapshot.get("pin")?.toString()
-                        ?: snapshot.getString("admin_pin")
-                        ?: snapshot.get("admin_pin")?.toString())?.trim()
-                    val updatedAt = snapshot.getLong("securityKeyUpdatedAtMillis")
-                        ?: snapshot.getLong("updatedAtMillis")
-                        ?: 0L
+                    val secKey = extractString(snapshot, "securityKey", "security_key")?.trim()
+                    val pin = extractString(snapshot, "pin", "admin_pin")?.trim()
+                    val updatedAt = extractMillis(snapshot, "securityKeyUpdatedAtMillis", "updatedAtMillis") ?: 0L
                     SystemControlConfig.RemoteSecurityKeySnapshot(
                         securityKey = secKey,
                         pin = pin,
@@ -4703,24 +4762,35 @@ object FirebaseService {
     }
 
     fun observeSystemShutdownStatus(): Flow<SystemControlConfig.SystemShutdownStatus?> = callbackFlow {
-        val docRef = firestore.collection("admin_config").document("system_status")
-        val listener = docRef.addSnapshotListener { snapshot, error ->
-            if (error != null || snapshot == null || !snapshot.exists()) {
-                trySend(null)
-                return@addSnapshotListener
+        val listener = try {
+            val docRef = firestore.collection("admin_config").document("system_status")
+            docRef.addSnapshotListener { snapshot, error ->
+                try {
+                    if (error != null || snapshot == null || !snapshot.exists()) {
+                        trySend(null)
+                        return@addSnapshotListener
+                    }
+                    val isShutdown = extractBoolean(snapshot, "isShutdown") ?: false
+                    val updatedAt = extractMillis(snapshot, "updatedAtMillis") ?: 0L
+                    val updatedBy = extractString(snapshot, "updatedBy") ?: ""
+                    trySend(
+                        SystemControlConfig.SystemShutdownStatus(
+                            isShutdown = isShutdown,
+                            updatedAtMillis = updatedAt,
+                            updatedBy = updatedBy
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing system shutdown status: ${e.message}")
+                    trySend(null)
+                }
             }
-            val isShutdown = snapshot.getBoolean("isShutdown") ?: false
-            val updatedAt = snapshot.getLong("updatedAtMillis") ?: 0L
-            val updatedBy = snapshot.getString("updatedBy") ?: ""
-            trySend(
-                SystemControlConfig.SystemShutdownStatus(
-                    isShutdown = isShutdown,
-                    updatedAtMillis = updatedAt,
-                    updatedBy = updatedBy
-                )
-            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching system shutdown listener: ${e.message}")
+            trySend(null)
+            null
         }
-        awaitClose { listener.remove() }
+        awaitClose { try { listener?.remove() } catch (_: Exception) {} }
     }
 
     suspend fun setSystemShutdownStatus(
@@ -4755,17 +4825,118 @@ object FirebaseService {
         return firestoreSuccess
     }
 
-    fun observeLeaderboardResetAt(): Flow<Long> = callbackFlow {
-        val docRef = firestore.collection("admin_config").document("leaderboard")
-        val listener = docRef.addSnapshotListener { snapshot, error ->
-            if (error != null || snapshot == null || !snapshot.exists()) {
-                trySend(0L)
-                return@addSnapshotListener
+    private fun parseLeaderboardCycleDocument(doc: com.google.firebase.firestore.DocumentSnapshot): SystemControlConfig.LeaderboardCycleStatus? {
+        if (!doc.exists()) return null
+        val resetAt = extractMillis(doc, "leaderboardResetAt") ?: 0L
+        val cycleStart = extractMillis(doc, "leaderboardCycleStartAt") ?: 0L
+        val nextReset = extractMillis(doc, "leaderboardNextResetAt") ?: 0L
+        if (resetAt <= 0L && cycleStart <= 0L && nextReset <= 0L) return null
+        return SystemControlConfig.LeaderboardCycleStatus(
+            lastResetAtMillis = resetAt,
+            cycleStartAtMillis = if (cycleStart > 0L) cycleStart else resetAt,
+            nextResetAtMillis = if (nextReset > 0L) nextReset else (if (resetAt > 0L) resetAt + SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS else 0L)
+        )
+    }
+
+    fun observeLeaderboardCycleStatus(): Flow<SystemControlConfig.LeaderboardCycleStatus?> = callbackFlow {
+        val listener = try {
+            val docRef = firestore.collection("admin_config").document("leaderboard")
+            docRef.addSnapshotListener { snapshot, error ->
+                try {
+                    if (error != null || snapshot == null || !snapshot.exists()) {
+                        trySend(null)
+                        return@addSnapshotListener
+                    }
+                    trySend(parseLeaderboardCycleDocument(snapshot))
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing leaderboard cycle status: ${e.message}")
+                    trySend(null)
+                }
             }
-            val ts = snapshot.getLong("leaderboardResetAt") ?: 0L
-            trySend(ts)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching leaderboard cycle listener: ${e.message}")
+            trySend(null)
+            null
         }
-        awaitClose { listener.remove() }
+        awaitClose { try { listener?.remove() } catch (_: Exception) {} }
+    }
+
+    suspend fun getLeaderboardCycleOnce(): SystemControlConfig.LeaderboardCycleStatus? {
+        val fsCycle = try {
+            val doc = withTimeoutOrNull(3000L) {
+                firestore.collection("admin_config").document("leaderboard").get().awaitResult().getOrNull()
+            }
+            if (doc != null) parseLeaderboardCycleDocument(doc) else null
+        } catch (_: Exception) {
+            null
+        }
+        val rtdbCycle = try {
+            FirebaseRealtimeService.getLeaderboardCycleOnceFromRTDB()
+        } catch (_: Exception) {
+            null
+        }
+        return SystemControlConfig.resolveLeaderboardCycleStatus(fsCycle, rtdbCycle)
+    }
+
+    suspend fun ensureLeaderboardCycleSeeded(nowMillis: Long = System.currentTimeMillis()): SystemControlConfig.LeaderboardCycleStatus {
+        val existing = getLeaderboardCycleOnce()
+        if (existing != null && existing.effectiveNextResetAtMillis > 0L) {
+            return existing
+        }
+
+        val initialCycle = SystemControlConfig.LeaderboardCycleStatus(
+            lastResetAtMillis = existing?.lastResetAtMillis ?: 0L,
+            cycleStartAtMillis = nowMillis,
+            nextResetAtMillis = nowMillis + SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS
+        )
+
+        try {
+            val payload = mutableMapOf<String, Any>(
+                "leaderboardCycleStartAt" to initialCycle.cycleStartAtMillis,
+                "leaderboardNextResetAt" to initialCycle.nextResetAtMillis,
+                "cycleDurationDays" to SystemControlConfig.LEADERBOARD_CYCLE_DAYS
+            )
+            if (initialCycle.lastResetAtMillis > 0L) {
+                payload["leaderboardResetAt"] = initialCycle.lastResetAtMillis
+            }
+            firestore.collection("admin_config").document("leaderboard")
+                .set(payload, com.google.firebase.firestore.SetOptions.merge())
+                .awaitResult()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error seeding Firestore leaderboard cycle: ${e.message}")
+        }
+
+        try {
+            FirebaseRealtimeService.saveLeaderboardCycleToRTDB(initialCycle)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error seeding RTDB leaderboard cycle: ${e.message}")
+        }
+
+        return initialCycle
+    }
+
+    fun observeLeaderboardResetAt(): Flow<Long> = callbackFlow {
+        val listener = try {
+            val docRef = firestore.collection("admin_config").document("leaderboard")
+            docRef.addSnapshotListener { snapshot, error ->
+                try {
+                    if (error != null || snapshot == null || !snapshot.exists()) {
+                        trySend(0L)
+                        return@addSnapshotListener
+                    }
+                    val ts = extractMillis(snapshot, "leaderboardResetAt") ?: 0L
+                    trySend(ts)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing leaderboard reset timestamp: ${e.message}")
+                    trySend(0L)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching leaderboard reset listener: ${e.message}")
+            trySend(0L)
+            null
+        }
+        awaitClose { try { listener?.remove() } catch (_: Exception) {} }
     }
 
     suspend fun getLeaderboardResetAtOnce(): Long {
@@ -4774,19 +4945,38 @@ object FirebaseService {
             val doc = withTimeoutOrNull(3000L) {
                 firestore.collection("admin_config").document("leaderboard").get().awaitResult().getOrNull()
             }
-            val fsTs = doc?.getLong("leaderboardResetAt") ?: 0L
+            val fsTs = if (doc != null) extractMillis(doc, "leaderboardResetAt") ?: 0L else 0L
             if (fsTs > maxReset) maxReset = fsTs
         } catch (_: Exception) {}
         return maxReset
     }
 
-    suspend fun resetAllStudentLeaderboardXp(): Boolean {
-        val resetTs = System.currentTimeMillis()
+    suspend fun tryAutoResetLeaderboardIfExpired(nowMillis: Long = System.currentTimeMillis()): Pair<Boolean, SystemControlConfig.LeaderboardCycleStatus> {
+        val latestRemote = getLeaderboardCycleOnce()
+        if (latestRemote != null && latestRemote.effectiveNextResetAtMillis > nowMillis) {
+            // Another device or Admin already completed the cycle reset and advanced the timer
+            return Pair(false, latestRemote)
+        }
+        val success = resetAllStudentLeaderboardXp(
+            resetTs = nowMillis,
+            updatedBy = "auto_30day_cycle"
+        )
+        return Pair(success, SystemControlConfig.createLeaderboardCycleFromReset(nowMillis))
+    }
+
+    suspend fun resetAllStudentLeaderboardXp(
+        resetTs: Long = System.currentTimeMillis(),
+        updatedBy: String = "ullassuvarna65@gmail.com"
+    ): Boolean {
+        val nextResetAt = resetTs + SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS
         return try {
-            // 1. Publish global leaderboard reset timestamp so all clients zero cached XP immediately
-            val resetMeta = mapOf(
+            // 1. Publish global leaderboard reset timestamp & next 30-day cycle so all clients zero cached XP and restart countdown immediately
+            val resetMeta = mapOf<String, Any>(
                 "leaderboardResetAt" to resetTs,
-                "updatedBy" to "ullassuvarna65@gmail.com"
+                "leaderboardCycleStartAt" to resetTs,
+                "leaderboardNextResetAt" to nextResetAt,
+                "cycleDurationDays" to SystemControlConfig.LEADERBOARD_CYCLE_DAYS,
+                "updatedBy" to updatedBy
             )
             firestore.collection("admin_config").document("leaderboard")
                 .set(resetMeta, com.google.firebase.firestore.SetOptions.merge())
@@ -4834,7 +5024,7 @@ object FirebaseService {
                 }
             }
 
-            // 4. Reset RTDB leaderboard & liveXP nodes and store leaderboardResetAt
+            // 4. Reset RTDB leaderboard & liveXP nodes and store leaderboardResetAt + next 30-day cycle
             FirebaseRealtimeService.resetAllLeaderboardXpInRTDB(resetTs)
             true
         } catch (e: Exception) {
@@ -4848,16 +5038,10 @@ object FirebaseService {
     // -------------------------------------------------------------
     private fun parseMaintenanceDocument(doc: com.google.firebase.firestore.DocumentSnapshot): MaintenanceConfig {
         val enabled = extractBoolean(doc, "maintenanceEnabled") ?: false
-        val startTime = (doc.get("maintenanceStartTime") as? Number)?.toLong()
-            ?: doc.get("maintenanceStartTime")?.toString()?.toLongOrNull()
-            ?: 0L
-        val endTime = (doc.get("maintenanceEndTime") as? Number)?.toLong()
-            ?: doc.get("maintenanceEndTime")?.toString()?.toLongOrNull()
-            ?: 0L
-        val updatedAt = (doc.get("updatedAt") as? Number)?.toLong()
-            ?: doc.get("updatedAt")?.toString()?.toLongOrNull()
-            ?: 0L
-        val updatedBy = doc.getString("updatedBy").orEmpty()
+        val startTime = extractMillis(doc, "maintenanceStartTime") ?: 0L
+        val endTime = extractMillis(doc, "maintenanceEndTime") ?: 0L
+        val updatedAt = extractMillis(doc, "updatedAt", "serverUpdatedAt") ?: 0L
+        val updatedBy = extractString(doc, "updatedBy").orEmpty()
         return MaintenanceConfig(
             maintenanceEnabled = enabled,
             maintenanceStartTime = startTime,
@@ -4868,15 +5052,26 @@ object FirebaseService {
     }
 
     fun observeMaintenanceConfig(): Flow<MaintenanceConfig?> = callbackFlow {
-        val docRef = firestore.collection("admin_config").document("maintenance")
-        val listener = docRef.addSnapshotListener { snapshot, error ->
-            if (error != null || snapshot == null || !snapshot.exists()) {
-                trySend(null)
-                return@addSnapshotListener
+        val listener = try {
+            val docRef = firestore.collection("admin_config").document("maintenance")
+            docRef.addSnapshotListener { snapshot, error ->
+                try {
+                    if (error != null || snapshot == null || !snapshot.exists()) {
+                        trySend(null)
+                        return@addSnapshotListener
+                    }
+                    trySend(parseMaintenanceDocument(snapshot))
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing maintenance config snapshot: ${e.message}")
+                    trySend(null)
+                }
             }
-            trySend(parseMaintenanceDocument(snapshot))
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed attaching maintenance config listener: ${e.message}")
+            trySend(null)
+            null
         }
-        awaitClose { listener.remove() }
+        awaitClose { try { listener?.remove() } catch (_: Exception) {} }
     }
 
     suspend fun getMaintenanceConfigOnce(): MaintenanceConfig? {

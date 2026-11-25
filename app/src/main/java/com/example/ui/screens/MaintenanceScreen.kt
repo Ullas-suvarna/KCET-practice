@@ -264,6 +264,7 @@ private fun MaintenanceIllustration(
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val minDim = size.minDimension
+            if (minDim <= 2f) return@Canvas
             val center = Offset(size.width / 2f, size.height / 2f)
 
             // Soft atmospheric halo

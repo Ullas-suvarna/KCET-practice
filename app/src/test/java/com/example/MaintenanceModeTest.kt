@@ -168,4 +168,40 @@ class MaintenanceModeTest {
             )
         }
     }
+
+    @Test
+    fun `startup classes load cleanly and MainViewModel initializes StateFlows before collectors`() {
+        val startupClassNames = listOf(
+            "com.example.MainActivity",
+            "com.example.MainActivityKt",
+            "com.example.viewmodel.MainViewModel",
+            "com.example.data.FirebaseService",
+            "com.example.data.FirebaseRealtimeService"
+        )
+        for (className in startupClassNames) {
+            val cls = Class.forName(className)
+            assertNotNull("Expected $className to load", cls)
+            for (m in cls.declaredMethods) {
+                assertTrue(
+                    "Method $className.${m.name} has ${m.parameterCount} params, must be <= 255",
+                    m.parameterCount <= 255
+                )
+            }
+        }
+
+        val vmFile = java.io.File("src/main/java/com/example/viewmodel/MainViewModel.kt").let {
+            if (it.exists()) it else java.io.File("app/src/main/java/com/example/viewmodel/MainViewModel.kt")
+        }
+        assertTrue("Expected MainViewModel.kt to exist for init-order verification", vmFile.exists())
+        val content = vmFile.readText()
+        val initContextIdx = content.indexOf("FirebaseService.initContext")
+        val dbInitIdx = content.indexOf("AppDatabase.getInstance")
+        assertTrue("FirebaseService.initContext must be called before AppDatabase.getInstance", initContextIdx in 0 until dbInitIdx)
+
+        val currentScreenDeclIdx = content.indexOf("private val _currentScreen")
+        val maintenanceCollectIdx = content.indexOf("_maintenanceConfig")
+        val maintenanceCollectorLaunchIdx = content.indexOf("MaintenanceControlConfig.resolveAuthoritativeConfig")
+        assertTrue("_currentScreen must be declared before startup maintenance collector", currentScreenDeclIdx in 0 until maintenanceCollectorLaunchIdx)
+        assertTrue("_maintenanceConfig must be declared", maintenanceCollectIdx >= 0)
+    }
 }

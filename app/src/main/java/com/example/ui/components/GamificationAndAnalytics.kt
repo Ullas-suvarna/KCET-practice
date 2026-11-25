@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -48,19 +49,24 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.data.AnalyticsSummary
 import com.example.data.BadgeItem
 import com.example.data.LeaderboardEntry
 import com.example.data.Subject
 import com.example.data.SubjectAnalytics
+import com.example.data.SystemControlConfig
 import com.example.data.TopicAccuracy
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 data class LeaderboardBadgeInfo(
     val title: String,
@@ -1076,6 +1082,8 @@ fun BronzeBigBadgeDialog(
 fun LeaderboardCard(
     leaderboardEntries: List<LeaderboardEntry>,
     modifier: Modifier = Modifier,
+    leaderboardCycle: SystemControlConfig.LeaderboardCycleStatus = SystemControlConfig.LeaderboardCycleStatus(),
+    leaderboardRemainingMillisFlow: StateFlow<Long>? = null,
     onChallengeStudent: ((LeaderboardEntry) -> Unit)? = null
 ) {
     var bigBadgeStudent by remember { mutableStateOf<LeaderboardEntry?>(null) }
@@ -1205,6 +1213,13 @@ fun LeaderboardCard(
             }
 
             Spacer(modifier = Modifier.height(14.dp))
+
+            LeaderboardSeasonResetTimerBanner(
+                leaderboardCycle = leaderboardCycle,
+                remainingMillisFlow = leaderboardRemainingMillisFlow
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
 
             // Tier Guide Summary Bar (GrandMaster, Master, Diamond, Silver, Bronze preview)
             androidx.compose.foundation.lazy.LazyRow(
@@ -1351,6 +1366,156 @@ fun LeaderboardCard(
                 Spacer(modifier = Modifier.height(10.dp))
             }
         }
+    }
+}
+
+@Composable
+fun LeaderboardSeasonResetTimerBanner(
+    leaderboardCycle: SystemControlConfig.LeaderboardCycleStatus,
+    remainingMillisFlow: StateFlow<Long>?
+) {
+    val fallbackFlow = remember { MutableStateFlow(SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS) }
+    val remainingMs by (remainingMillisFlow ?: fallbackFlow).collectAsStateWithLifecycle()
+    val parts = remember(remainingMs) {
+        SystemControlConfig.formatLeaderboardCountdownParts(remainingMs)
+    }
+    val resetDateLabel = remember(leaderboardCycle.effectiveNextResetAtMillis) {
+        SystemControlConfig.formatLeaderboardResetDateText(leaderboardCycle.effectiveNextResetAtMillis)
+    }
+    val progress = remember(remainingMs, leaderboardCycle) {
+        val total = SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS.toFloat()
+        val elapsed = (total - remainingMs.coerceIn(0L, SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS).toFloat())
+        (elapsed / total).coerceIn(0f, 1f)
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                Brush.horizontalGradient(
+                    colors = listOf(Color(0xFF1E1B4B), Color(0xFF312E81), Color(0xFF4C1D95))
+                )
+            )
+            .border(1.dp, Color(0xFF818CF8).copy(alpha = 0.55f), RoundedCornerShape(16.dp))
+            .padding(14.dp)
+            .testTag("leaderboard_30day_timer")
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFF59E0B).copy(alpha = 0.22f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Timer,
+                            contentDescription = "30-Day Reset Timer",
+                            tint = Color(0xFFFBBF24),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "30-Day Season Auto-Reset",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "All student XP resets to 0 XP automatically",
+                            fontSize = 10.sp,
+                            color = Color(0xFFC7D2FE)
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFFF59E0B).copy(alpha = 0.2f),
+                    border = androidx.compose.foundation.BorderStroke(0.8.dp, Color(0xFFFBBF24).copy(alpha = 0.6f))
+                ) {
+                    Text(
+                        text = if (remainingMs == 0L) "RESETTING..." else "LIVE",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color(0xFFFDE68A),
+                        letterSpacing = 0.8.sp,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CountdownUnitTile(value = parts.daysFormatted, label = "DAYS", modifier = Modifier.weight(1f))
+                CountdownUnitTile(value = parts.hoursFormatted, label = "HRS", modifier = Modifier.weight(1f))
+                CountdownUnitTile(value = parts.minutesFormatted, label = "MIN", modifier = Modifier.weight(1f))
+                CountdownUnitTile(value = parts.secondsFormatted, label = "SEC", modifier = Modifier.weight(1f))
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(5.dp)
+                        .clip(RoundedCornerShape(999.dp)),
+                    color = Color(0xFFFBBF24),
+                    trackColor = Color.White.copy(alpha = 0.16f)
+                )
+                Text(
+                    text = resetDateLabel,
+                    fontSize = 10.sp,
+                    color = Color(0xFFE0E7FF),
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CountdownUnitTile(
+    value: String,
+    label: String,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFF0F172A).copy(alpha = 0.68f))
+            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(10.dp))
+            .padding(vertical = 7.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = value,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Black,
+            color = Color(0xFFFDE68A)
+        )
+        Text(
+            text = label,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.7.sp,
+            color = Color(0xFFCBD5E1)
+        )
     }
 }
 
