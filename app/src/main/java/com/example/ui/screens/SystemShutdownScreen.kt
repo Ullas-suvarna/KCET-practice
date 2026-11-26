@@ -70,6 +70,8 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -86,6 +88,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -94,11 +97,24 @@ fun SystemShutdownScreen(
     onAdminDirectLogin: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     var showKeyDialog by remember { mutableStateOf(false) }
     var enteredKey by remember { mutableStateOf("") }
     var keyVisible by remember { mutableStateOf(false) }
     var isVerifying by remember { mutableStateOf(false) }
     var keyError by remember { mutableStateOf<String?>(null) }
+
+    val dismissKeyDialogSafely: (() -> Unit) -> Unit = { afterCleanup ->
+        try {
+            focusManager.clearFocus(force = true)
+            keyboardController?.hide()
+        } catch (_: Exception) {}
+        scope.launch {
+            delay(60)
+            afterCleanup()
+        }
+    }
 
     val submitKey: () -> Unit = {
         val candidate = enteredKey.trim()
@@ -115,10 +131,12 @@ fun SystemShutdownScreen(
                 }
                 isVerifying = false
                 if (matched) {
-                    showKeyDialog = false
-                    enteredKey = ""
-                    keyError = null
-                    onAdminDirectLogin()
+                    dismissKeyDialogSafely {
+                        showKeyDialog = false
+                        enteredKey = ""
+                        keyError = null
+                        onAdminDirectLogin()
+                    }
                 } else {
                     keyError = "Incorrect security key. Access denied."
                 }
@@ -449,7 +467,7 @@ fun SystemShutdownScreen(
     if (showKeyDialog) {
         AlertDialog(
             onDismissRequest = {
-                if (!isVerifying) showKeyDialog = false
+                if (!isVerifying) dismissKeyDialogSafely { showKeyDialog = false }
             },
             modifier = Modifier.testTag("shutdown_security_key_dialog"),
             icon = {
@@ -537,7 +555,7 @@ fun SystemShutdownScreen(
             },
             dismissButton = {
                 OutlinedButton(
-                    onClick = { if (!isVerifying) showKeyDialog = false },
+                    onClick = { if (!isVerifying) dismissKeyDialogSafely { showKeyDialog = false } },
                     enabled = !isVerifying
                 ) {
                     Text("Cancel")

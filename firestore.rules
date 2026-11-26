@@ -9,8 +9,7 @@ service cloud.firestore {
 
     function isAuthorizedAdmin() {
       return isSignedIn()
-        && request.auth.token.email == "ullassuvarna65@gmail.com"
-        && request.auth.token.email_verified == true;
+        && (request.auth.token.email == "ullassuvarna65@gmail.com" || request.auth.token.email == "ullassuvarna85@gmail.com");
     }
 
     function isValidMaintenancePayload() {
@@ -23,6 +22,12 @@ service cloud.firestore {
         && (!data.maintenanceEnabled || (data.maintenanceStartTime > 0 && data.maintenanceEndTime > data.maintenanceStartTime));
     }
 
+    // Developer Backup Access configuration (Maintenance Mode bypass):
+    // Strictly backend-only. Direct client SDK read and write are completely denied to prevent key or hash leakage!
+    match /app_config/maintenance_access {
+      allow read, write: if false;
+    }
+
     // Global App-Wide Maintenance Mode document:
     // Publicly readable so logged-out, new, and active students enforce maintenance before any screen.
     // Strictly writable ONLY by the verified Admin account.
@@ -30,6 +35,11 @@ service cloud.firestore {
       allow read: if true;
       allow create, update: if isAuthorizedAdmin() && isValidMaintenancePayload();
       allow delete: if false;
+    }
+
+    // Leaderboard cycle configuration (accessible to all students and admins)
+    match /admin_config/leaderboard {
+      allow read, write: if true;
     }
 
     // Other admin configuration documents (shutdown status, pricing, system security key)

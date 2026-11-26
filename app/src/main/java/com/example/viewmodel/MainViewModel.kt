@@ -263,18 +263,23 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         val resetAt = prefs.getLong("leaderboard_cycle_reset_at", 0L)
         val startAt = prefs.getLong("leaderboard_cycle_start_at", 0L)
         val nextAt = prefs.getLong("leaderboard_cycle_next_reset_at", 0L)
-        if (nextAt > 0L) {
+        val isPaused = prefs.getBoolean("leaderboard_cycle_is_paused", false)
+        val pausedRem = prefs.getLong("leaderboard_cycle_paused_rem", 0L)
+        val now = System.currentTimeMillis()
+        if (nextAt > now) {
             return com.example.data.SystemControlConfig.LeaderboardCycleStatus(
                 lastResetAtMillis = resetAt,
-                cycleStartAtMillis = startAt,
-                nextResetAtMillis = nextAt
+                cycleStartAtMillis = if (startAt > 0L) startAt else now,
+                nextResetAtMillis = nextAt,
+                isPaused = isPaused,
+                pausedRemainingMillis = pausedRem
             )
         }
-        val now = System.currentTimeMillis()
         val seeded = com.example.data.SystemControlConfig.LeaderboardCycleStatus(
             lastResetAtMillis = resetAt,
             cycleStartAtMillis = now,
-            nextResetAtMillis = now + com.example.data.SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS
+            nextResetAtMillis = now + com.example.data.SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS,
+            isPaused = false
         )
         persistLeaderboardCycle(seeded)
         return seeded
@@ -285,6 +290,8 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
             .putLong("leaderboard_cycle_reset_at", cycle.lastResetAtMillis)
             .putLong("leaderboard_cycle_start_at", cycle.effectiveCycleStartAtMillis)
             .putLong("leaderboard_cycle_next_reset_at", cycle.effectiveNextResetAtMillis)
+            .putBoolean("leaderboard_cycle_is_paused", cycle.isPaused)
+            .putLong("leaderboard_cycle_paused_rem", cycle.pausedRemainingMillis)
             .apply()
     }
 
@@ -365,6 +372,13 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
 
     private val _maintenanceFeedback = MutableStateFlow<Pair<Boolean, String>?>(null)
     val maintenanceFeedback: StateFlow<Pair<Boolean, String>?> = _maintenanceFeedback.asStateFlow()
+
+    // Temporary Developer Maintenance Bypass Session (in-memory only, cleared on logout/restart/timeout)
+    private val _isMaintenanceBypassActive = MutableStateFlow(false)
+    val isMaintenanceBypassActive: StateFlow<Boolean> = _isMaintenanceBypassActive.asStateFlow()
+
+    private val _maintenanceBypassExpiresAtMs = MutableStateFlow(0L)
+    val maintenanceBypassExpiresAtMs: StateFlow<Long> = _maintenanceBypassExpiresAtMs.asStateFlow()
 
     private var lastAutoDisabledEndTime: Long = 0L
 
@@ -1307,6 +1321,7 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
     }
 
     fun logout() {
+        clearMaintenanceBypass()
         clearSession()
         app.getSharedPreferences("user_session", android.content.Context.MODE_PRIVATE)
             .edit()
@@ -2053,7 +2068,7 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
     val activeTestSet: StateFlow<com.example.data.TestSeriesSet?> = _activeTestSet.asStateFlow()
 
     fun navigateTo(screen: Screen, replaceTop: Boolean = false) {
-        if (isMaintenanceActive.value && screen != Screen.ADMIN) {
+        if (isMaintenanceActive.value && screen != Screen.ADMIN && !_isMaintenanceBypassActive.value) {
             return
         }
         val currentTab = _selectedTab.value
@@ -2070,7 +2085,7 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
     }
 
     fun selectBottomTab(tab: BottomTab) {
-        if (isMaintenanceActive.value && _currentScreen.value != Screen.ADMIN) {
+        if (isMaintenanceActive.value && _currentScreen.value != Screen.ADMIN && !_isMaintenanceBypassActive.value) {
             return
         }
         _selectedTab.value = tab
@@ -2084,7 +2099,7 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
     }
 
     fun navigateBack(): Boolean {
-        if (isMaintenanceActive.value && _currentScreen.value != Screen.ADMIN) {
+        if (isMaintenanceActive.value && _currentScreen.value != Screen.ADMIN && !_isMaintenanceBypassActive.value) {
             return false
         }
         if (_currentScreen.value == Screen.ADMIN) {
@@ -3518,6 +3533,11 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         _maintenanceNowMs.value = now
         _leaderboardNowMs.value = now
         val cfg = _maintenanceConfig.value
+        if (_isMaintenanceBypassActive.value && _maintenanceBypassExpiresAtMs.value > 0L) {
+            if (System.currentTimeMillis() >= _maintenanceBypassExpiresAtMs.value) {
+                clearMaintenanceBypass()
+            }
+        }
         if (cfg.isExpired(now)) {
             viewModelScope.launch {
                 handleMaintenanceExpired(cfg, now)
@@ -3739,27 +3759,84 @@ class MainViewModel(val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // -------------------------------------------------------------
+    // HIDDEN DEVELOPER BACKUP ACCESS (Maintenance Mode Bypass)
+    // -------------------------------------------------------------
+    fun grantMaintenanceDeveloperAccess(durationMinutes: Int = 30) {
+        _isMaintenanceBypassActive.value = true
+        _maintenanceBypassExpiresAtMs.value = System.currentTimeMillis() + (durationMinutes * 60 * 1000L)
+        resetNavigation(Screen.AUTH, BottomTab.HOME)
+    }
+
+    fun clearMaintenanceBypass() {
+        _isMaintenanceBypassActive.value = false
+        _maintenanceBypassExpiresAtMs.value = 0L
+    }
+
+    suspend fun verifyDeveloperAccessKey(key: String): com.example.data.MaintenanceVerificationResult {
+        return com.example.data.MaintenanceAccessService.verifyMaintenanceKey(key)
+    }
+
     fun resetAllLeaderboardXp(onComplete: ((Boolean) -> Unit)? = null) {
         if (_isResettingLeaderboard.value) return
         _isResettingLeaderboard.value = true
+        val resetTs = currentServerTimeMillis()
+        activeLeaderboardResetAt = maxOf(activeLeaderboardResetAt, resetTs)
+        prefs.edit().putLong("last_handled_leaderboard_reset_at", activeLeaderboardResetAt).apply()
+        val renewedCycle = com.example.data.SystemControlConfig.createLeaderboardCycleFromReset(resetTs)
+        _leaderboardCycle.value = renewedCycle
+        persistLeaderboardCycle(renewedCycle)
+        _leaderboardNowMs.value = resetTs
+        lastRemoteLeaderboardEntries = lastRemoteLeaderboardEntries?.map { it.copy(points = 0) }
+        zeroLocalStudentXp()
+        updateLeaderboard()
         viewModelScope.launch {
-            val resetTs = currentServerTimeMillis()
             val success = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 FirebaseService.resetAllStudentLeaderboardXp(resetTs = resetTs)
             }
-            if (success) {
-                activeLeaderboardResetAt = maxOf(activeLeaderboardResetAt, resetTs)
-                prefs.edit().putLong("last_handled_leaderboard_reset_at", activeLeaderboardResetAt).apply()
-                val renewedCycle = com.example.data.SystemControlConfig.createLeaderboardCycleFromReset(resetTs)
-                _leaderboardCycle.value = renewedCycle
-                persistLeaderboardCycle(renewedCycle)
-                _leaderboardNowMs.value = resetTs
-                lastRemoteLeaderboardEntries = lastRemoteLeaderboardEntries?.map { it.copy(points = 0) }
-                zeroLocalStudentXp()
-                updateLeaderboard()
-            }
             _isResettingLeaderboard.value = false
             onComplete?.invoke(success)
+        }
+    }
+
+    fun pauseLeaderboardTimer(paused: Boolean) {
+        val current = _leaderboardCycle.value
+        val now = currentServerTimeMillis()
+        val rem = current.remainingMillis(now)
+        val updated = current.copy(
+            isPaused = paused,
+            pausedAtMillis = if (paused) now else 0L,
+            pausedRemainingMillis = if (paused) rem else 0L,
+            nextResetAtMillis = if (!paused && current.pausedRemainingMillis > 0L) now + current.pausedRemainingMillis else current.nextResetAtMillis
+        )
+        _leaderboardCycle.value = updated
+        persistLeaderboardCycle(updated)
+        viewModelScope.launch {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                FirebaseService.setLeaderboardPauseState(paused)
+            }
+        }
+    }
+
+    fun extendLeaderboardTimer(extraMillis: Long) {
+        val current = _leaderboardCycle.value
+        val now = currentServerTimeMillis()
+        val currentRem = current.remainingMillis(now)
+        val newNextReset = if (current.isPaused) {
+            current.nextResetAtMillis + extraMillis
+        } else {
+            now + currentRem + extraMillis
+        }
+        val updated = current.copy(
+            nextResetAtMillis = newNextReset,
+            pausedRemainingMillis = if (current.isPaused) current.pausedRemainingMillis + extraMillis else 0L
+        )
+        _leaderboardCycle.value = updated
+        persistLeaderboardCycle(updated)
+        viewModelScope.launch {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                FirebaseService.extendLeaderboardCycle(extraMillis)
+            }
         }
     }
 

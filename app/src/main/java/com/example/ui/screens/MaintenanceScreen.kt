@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -17,6 +18,8 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,22 +35,50 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -73,7 +104,11 @@ import com.example.data.MaintenanceConfig
 import com.example.data.MaintenanceControlConfig
 import com.example.ui.theme.KcetIndigoPrimary
 import com.example.ui.theme.KcetVioletSecondary
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -82,10 +117,16 @@ import kotlin.math.sin
 fun MaintenanceScreen(
     config: MaintenanceConfig,
     remainingMillisFlow: StateFlow<Long>,
-    serverTimeOffsetMs: Long
+    serverTimeOffsetMs: Long,
+    onVerifyDeveloperKey: suspend (String) -> com.example.data.MaintenanceVerificationResult = {
+        com.example.data.MaintenanceAccessService.verifyMaintenanceKey(it)
+    },
+    onUnlockSuccess: () -> Unit = {}
 ) {
     // Prevent back button bypass while Maintenance Mode is active
     BackHandler(enabled = true) { /* Maintenance Mode locks normal navigation */ }
+
+    var showDeveloperAccessDialog by remember { mutableStateOf(false) }
 
     val colorScheme = MaterialTheme.colorScheme
     val isDark = colorScheme.background.red < 0.3f && colorScheme.background.blue < 0.3f
@@ -146,6 +187,7 @@ fun MaintenanceScreen(
                     // 1. Maintenance Illustration (Interlocking Rotating Gears + Tool Emblem)
                     MaintenanceIllustration(
                         isDark = isDark,
+                        onOpenDeveloperAccess = { showDeveloperAccessDialog = true },
                         modifier = Modifier
                             .size(164.dp)
                             .testTag("maintenance_illustration")
@@ -225,12 +267,25 @@ fun MaintenanceScreen(
             }
         }
     }
+
+    if (showDeveloperAccessDialog) {
+        DeveloperAccessDialog(
+            onDismissRequest = { showDeveloperAccessDialog = false },
+            onVerifyDeveloperKey = onVerifyDeveloperKey,
+            onUnlockSuccess = {
+                showDeveloperAccessDialog = false
+                onUnlockSuccess()
+            },
+            isDark = isDark
+        )
+    }
 }
 
 @Composable
 private fun MaintenanceIllustration(
     isDark: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenDeveloperAccess: () -> Unit = {}
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "maintenance_gears")
     val primaryGearAngle by infiniteTransition.animateFloat(
@@ -315,7 +370,7 @@ private fun MaintenanceIllustration(
             }
         }
 
-        // Foreground tool badge anchored cleanly at bottom-right of illustration
+        // Foreground tool badge anchored cleanly at bottom-right of illustration (Hidden Developer Access Trigger)
         Surface(
             shape = CircleShape,
             color = if (isDark) Color(0xFF1E293B) else Color.White,
@@ -325,11 +380,20 @@ private fun MaintenanceIllustration(
                 .align(Alignment.BottomEnd)
                 .padding(end = 14.dp, bottom = 12.dp)
                 .size(44.dp)
+                .testTag("maintenance_developer_tool_button")
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onOpenDeveloperAccess
+                )
         ) {
-            Box(contentAlignment = Alignment.Center) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.fillMaxSize()
+            ) {
                 Icon(
                     imageVector = Icons.Default.Build,
-                    contentDescription = null,
+                    contentDescription = "Developer Access",
                     tint = if (isDark) Color(0xFF818CF8) else KcetIndigoPrimary,
                     modifier = Modifier.size(22.dp)
                 )
@@ -655,3 +719,279 @@ private fun CountdownSeparator(isDark: Boolean) {
             .padding(bottom = 20.dp)
     )
 }
+
+/**
+ * Developer Access Dialog
+ *
+ * Hidden maintenance-mode popup triggered only by clicking the existing wrench/tool emblem.
+ * Allows verified developers/administrators to enter their security key and proceed to the normal login screen.
+ */
+@Composable
+fun DeveloperAccessDialog(
+    onDismissRequest: () -> Unit,
+    onVerifyDeveloperKey: suspend (String) -> com.example.data.MaintenanceVerificationResult,
+    onUnlockSuccess: () -> Unit,
+    isDark: Boolean
+) {
+    val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val windowInfo = LocalWindowInfo.current
+    var enteredKey by remember { mutableStateOf("") }
+    var isPasswordVisible by remember { mutableStateOf(false) }
+    var isVerifying by remember { mutableStateOf(false) }
+    var isDismissing by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(windowInfo) {
+        try {
+            snapshotFlow { windowInfo.isWindowFocused }
+                .filter { it }
+                .first()
+            delay(120)
+            if (windowInfo.isWindowFocused && !isDismissing) {
+                focusRequester.requestFocus()
+            }
+        } catch (_: Exception) {}
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            try {
+                focusManager.clearFocus(force = true)
+                keyboardController?.hide()
+            } catch (_: Exception) {}
+        }
+    }
+
+    val dismissSafely: (() -> Unit) -> Unit = { afterCleanup ->
+        if (!isDismissing) {
+            isDismissing = true
+            try {
+                focusManager.clearFocus(force = true)
+                keyboardController?.hide()
+            } catch (_: Exception) {}
+            scope.launch {
+                delay(80)
+                afterCleanup()
+            }
+        }
+    }
+
+    val submitKey: () -> Unit = {
+        val trimmed = enteredKey.trim()
+        if (trimmed.isEmpty()) {
+            errorMessage = "Please enter the security key."
+        } else if (!isVerifying && !isDismissing) {
+            isVerifying = true
+            errorMessage = null
+            scope.launch {
+                val result = onVerifyDeveloperKey(trimmed)
+                isVerifying = false
+                when (result) {
+                    is com.example.data.MaintenanceVerificationResult.Success -> {
+                        dismissSafely {
+                            onDismissRequest()
+                            onUnlockSuccess()
+                        }
+                    }
+                    is com.example.data.MaintenanceVerificationResult.InvalidKey -> {
+                        errorMessage = result.message
+                    }
+                    is com.example.data.MaintenanceVerificationResult.AccessDisabled -> {
+                        errorMessage = result.message
+                    }
+                    is com.example.data.MaintenanceVerificationResult.RateLimited -> {
+                        errorMessage = result.message
+                    }
+                    is com.example.data.MaintenanceVerificationResult.NetworkError -> {
+                        errorMessage = result.message
+                    }
+                }
+            }
+        }
+    }
+
+    val dialogShape = RoundedCornerShape(24.dp)
+    val dialogBg = if (isDark) Color(0xFF1E293B) else Color.White
+    val contentColor = if (isDark) Color(0xFFF1F5F9) else Color(0xFF0F172A)
+    val subtitleColor = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+
+    AlertDialog(
+        onDismissRequest = {
+            if (!isVerifying && !isDismissing) {
+                dismissSafely(onDismissRequest)
+            }
+        },
+        shape = dialogShape,
+        containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = subtitleColor,
+        modifier = Modifier
+            .fillMaxWidth()
+            .widthIn(max = 440.dp)
+            .testTag("developer_access_dialog"),
+        icon = {
+            Surface(
+                shape = CircleShape,
+                color = KcetIndigoPrimary.copy(alpha = if (isDark) 0.22f else 0.12f),
+                border = BorderStroke(1.dp, KcetIndigoPrimary.copy(alpha = 0.35f)),
+                modifier = Modifier.size(52.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "Developer Access",
+                        tint = if (isDark) Color(0xFF818CF8) else KcetIndigoPrimary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+        },
+        title = {
+            Text(
+                text = "Developer Access",
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.2).sp
+                ),
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("developer_access_title")
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Text(
+                    text = "Enter the security key to continue.",
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        lineHeight = 20.sp
+                    ),
+                    color = subtitleColor,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("developer_access_description")
+                )
+
+                OutlinedTextField(
+                    value = enteredKey,
+                    onValueChange = {
+                        enteredKey = it
+                        if (errorMessage != null) {
+                            errorMessage = null
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester)
+                        .testTag("developer_access_key_input"),
+                    label = { Text("Security Key") },
+                    placeholder = { Text("Enter security key") },
+                    singleLine = true,
+                    enabled = !isVerifying,
+                    visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(
+                            onClick = { isPasswordVisible = !isPasswordVisible },
+                            enabled = !isVerifying,
+                            modifier = Modifier.testTag("developer_access_password_toggle")
+                        ) {
+                            Icon(
+                                imageVector = if (isPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (isPasswordVisible) "Hide password" else "Show password",
+                                tint = subtitleColor
+                            )
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { submitKey() }),
+                    isError = errorMessage != null,
+                    shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = KcetIndigoPrimary,
+                        unfocusedBorderColor = if (isDark) Color(0xFF334155) else Color(0xFFCBD5E1),
+                        focusedLabelColor = KcetIndigoPrimary,
+                        cursorColor = KcetIndigoPrimary
+                    )
+                )
+
+                AnimatedVisibility(
+                    visible = errorMessage != null,
+                    enter = fadeIn() + slideInVertically(),
+                    exit = fadeOut() + slideOutVertically()
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = errorMessage.orEmpty(),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontWeight = FontWeight.SemiBold
+                            ),
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                                .testTag("developer_access_error_message")
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = submitKey,
+                enabled = enteredKey.isNotBlank() && !isVerifying,
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = KcetIndigoPrimary,
+                    contentColor = Color.White
+                ),
+                modifier = Modifier.testTag("developer_access_unlock_button")
+            ) {
+                if (isVerifying) {
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .size(18.dp)
+                            .testTag("developer_access_loading_indicator"),
+                        strokeWidth = 2.dp,
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Verifying...")
+                } else {
+                    Text("Unlock")
+                }
+            }
+        },
+        dismissButton = {
+            OutlinedButton(
+                onClick = {
+                    if (!isVerifying && !isDismissing) {
+                        dismissSafely(onDismissRequest)
+                    }
+                },
+                enabled = !isVerifying && !isDismissing,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.testTag("developer_access_cancel_button")
+            ) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+

@@ -14,7 +14,9 @@ import com.example.data.OneToOneMessage
 import com.example.data.SeniorMentorProfile
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -3303,14 +3305,27 @@ fun OneToOneChatFullScreen(
     var isSending by remember { mutableStateOf(false) }
 
     val focusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
+    val windowInfo = LocalWindowInfo.current
 
-    LaunchedEffect(isChatExpired) {
+    LaunchedEffect(isChatExpired, windowInfo) {
         if (!isChatExpired) {
             delay(250)
             try {
-                focusRequester.requestFocus()
-                keyboardController?.show()
+                if (windowInfo.isWindowFocused) {
+                    focusRequester.requestFocus()
+                    keyboardController?.show()
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            try {
+                focusManager.clearFocus(force = true)
+                keyboardController?.hide()
             } catch (_: Exception) {}
         }
     }

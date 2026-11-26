@@ -144,6 +144,7 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
     val serverTimeOffsetMs by viewModel.serverTimeOffsetMs.collectAsStateWithLifecycle()
     val isUpdatingMaintenance by viewModel.isUpdatingMaintenance.collectAsStateWithLifecycle()
     val maintenanceFeedback by viewModel.maintenanceFeedback.collectAsStateWithLifecycle()
+    val isMaintenanceBypassActive by viewModel.isMaintenanceBypassActive.collectAsStateWithLifecycle()
 
     // Recalculate maintenance clock & auto-expiry whenever app returns from background
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -157,8 +158,8 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // Root-level Maintenance Mode gate: blocks all normal screens (including splash, onboarding, auth, student, mentor) while keeping Admin Portal accessible
-    val shouldShowMaintenanceOverlay = isMaintenanceActive && currentScreen != Screen.ADMIN
+    // Root-level Maintenance Mode gate: blocks all normal screens (including splash, onboarding, auth, student, mentor) while keeping Admin Portal and verified Developer Access accessible
+    val shouldShowMaintenanceOverlay = isMaintenanceActive && currentScreen != Screen.ADMIN && !isMaintenanceBypassActive
     val shouldShowShutdownOverlay = isSystemShutdown && currentScreen != Screen.ADMIN && currentScreen != Screen.SPLASH
 
     var selectedChallengeOpponent by remember { androidx.compose.runtime.mutableStateOf<com.example.data.LeaderboardEntry?>(null) }
@@ -187,6 +188,7 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
     val userPoints by viewModel.userPoints.collectAsStateWithLifecycle()
     val userBadges by viewModel.userBadges.collectAsStateWithLifecycle()
     val leaderboard by viewModel.leaderboard.collectAsStateWithLifecycle()
+    val leaderboardCycle by viewModel.leaderboardCycle.collectAsStateWithLifecycle()
     val analyticsSummary by viewModel.analyticsSummary.collectAsStateWithLifecycle()
     val showBadgeCongratsDialog by viewModel.showBadgeCongratsDialog.collectAsStateWithLifecycle()
     val userRank = leaderboard.find { it.isCurrentUser }?.rank ?: 5
@@ -240,7 +242,9 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
                     MaintenanceScreen(
                         config = maintenanceConfig,
                         remainingMillisFlow = viewModel.maintenanceRemainingMillis,
-                        serverTimeOffsetMs = serverTimeOffsetMs
+                        serverTimeOffsetMs = serverTimeOffsetMs,
+                        onVerifyDeveloperKey = { key -> viewModel.verifyDeveloperAccessKey(key) },
+                        onUnlockSuccess = { viewModel.grantMaintenanceDeveloperAccess() }
                     )
                 } else if (shouldShowShutdownOverlay) {
                     SystemShutdownScreen(
@@ -446,7 +450,9 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
                                         viewModel.linkEmailPasswordToGoogleUser(email, pass) { success, msg ->
                                             android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
                                         }
-                                    }
+                                    },
+                                    leaderboardCycle = leaderboardCycle,
+                                    leaderboardRemainingMillisFlow = viewModel.leaderboardRemainingMillis
                                     )
                                 }
                             }
@@ -568,7 +574,8 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
                                 maintenanceRemainingMillisFlow = viewModel.maintenanceRemainingMillis,
                                 serverTimeOffsetMs = serverTimeOffsetMs,
                                 isUpdatingMaintenance = isUpdatingMaintenance,
-                                maintenanceFeedback = maintenanceFeedback
+                                maintenanceFeedback = maintenanceFeedback,
+                                leaderboardCycle = leaderboardCycle
                             ),
                             actions = AdminPanelActions(
                                 onAddQuestion = { sub, qText, a, b, c, d, opt, exp ->
@@ -712,6 +719,8 @@ fun KcetAppMain(viewModel: MainViewModel = viewModel()) {
                                 onExtendMaintenance = { hrs, mins, replace -> viewModel.extendMaintenance(hrs, mins, replace) },
                                 onDisableMaintenance = { viewModel.disableMaintenance() },
                                 onClearMaintenanceFeedback = { viewModel.clearMaintenanceFeedback() },
+                                onTogglePauseLeaderboard = { paused -> viewModel.pauseLeaderboardTimer(paused) },
+                                onExtendLeaderboard = { extraMs -> viewModel.extendLeaderboardTimer(extraMs) },
                                 onBack = {
                                     viewModel.logout()
                                 }

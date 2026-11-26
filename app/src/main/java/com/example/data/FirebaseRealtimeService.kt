@@ -1581,7 +1581,10 @@ object FirebaseRealtimeService {
         try {
             val updates = mutableMapOf<String, Any>(
                 "leaderboardCycleStartAt" to cycle.effectiveCycleStartAtMillis,
-                "leaderboardNextResetAt" to cycle.effectiveNextResetAtMillis
+                "leaderboardNextResetAt" to cycle.effectiveNextResetAtMillis,
+                "isPaused" to cycle.isPaused,
+                "pausedAtMillis" to cycle.pausedAtMillis,
+                "pausedRemainingMillis" to cycle.pausedRemainingMillis
             )
             if (cycle.lastResetAtMillis > 0L) {
                 updates["leaderboardResetAt"] = cycle.lastResetAtMillis
@@ -1601,11 +1604,17 @@ object FirebaseRealtimeService {
             val resetAt = snapshot.child("leaderboardResetAt").asSafeLong(0L)
             val cycleStart = snapshot.child("leaderboardCycleStartAt").asSafeLong(0L)
             val nextReset = snapshot.child("leaderboardNextResetAt").asSafeLong(0L)
+            val isPaused = snapshot.child("isPaused").value?.toString()?.toBoolean() ?: false
+            val pausedAt = snapshot.child("pausedAtMillis").asSafeLong(0L)
+            val pausedRem = snapshot.child("pausedRemainingMillis").asSafeLong(0L)
             if (resetAt <= 0L && cycleStart <= 0L && nextReset <= 0L) return null
             SystemControlConfig.LeaderboardCycleStatus(
                 lastResetAtMillis = resetAt,
                 cycleStartAtMillis = if (cycleStart > 0L) cycleStart else resetAt,
-                nextResetAtMillis = if (nextReset > 0L) nextReset else (if (resetAt > 0L) resetAt + SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS else 0L)
+                nextResetAtMillis = if (nextReset > 0L) nextReset else (if (resetAt > 0L) resetAt + SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS else 0L),
+                isPaused = isPaused,
+                pausedAtMillis = pausedAt,
+                pausedRemainingMillis = pausedRem
             )
         } catch (e: Exception) {
             Log.w(TAG, "Error reading RTDB leaderboard cycle: ${e.message}")
@@ -1631,6 +1640,9 @@ object FirebaseRealtimeService {
                     val resetAt = snapshot.child("leaderboardResetAt").asSafeLong(0L)
                     val cycleStart = snapshot.child("leaderboardCycleStartAt").asSafeLong(0L)
                     val nextReset = snapshot.child("leaderboardNextResetAt").asSafeLong(0L)
+                    val isPaused = snapshot.child("isPaused").value?.toString()?.toBoolean() ?: false
+                    val pausedAt = snapshot.child("pausedAtMillis").asSafeLong(0L)
+                    val pausedRem = snapshot.child("pausedRemainingMillis").asSafeLong(0L)
                     if (resetAt <= 0L && cycleStart <= 0L && nextReset <= 0L) {
                         trySend(null)
                         return
@@ -1639,7 +1651,10 @@ object FirebaseRealtimeService {
                         SystemControlConfig.LeaderboardCycleStatus(
                             lastResetAtMillis = resetAt,
                             cycleStartAtMillis = if (cycleStart > 0L) cycleStart else resetAt,
-                            nextResetAtMillis = if (nextReset > 0L) nextReset else (if (resetAt > 0L) resetAt + SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS else 0L)
+                            nextResetAtMillis = if (nextReset > 0L) nextReset else (if (resetAt > 0L) resetAt + SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS else 0L),
+                            isPaused = isPaused,
+                            pausedAtMillis = pausedAt,
+                            pausedRemainingMillis = pausedRem
                         )
                     )
                 } catch (e: Exception) {

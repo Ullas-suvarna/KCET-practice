@@ -235,7 +235,8 @@ data class AdminPanelState(
     val maintenanceRemainingMillisFlow: StateFlow<Long>? = null,
     val serverTimeOffsetMs: Long = 0L,
     val isUpdatingMaintenance: Boolean = false,
-    val maintenanceFeedback: Pair<Boolean, String>? = null
+    val maintenanceFeedback: Pair<Boolean, String>? = null,
+    val leaderboardCycle: com.example.data.SystemControlConfig.LeaderboardCycleStatus = com.example.data.SystemControlConfig.LeaderboardCycleStatus()
 )
 
 data class AdminPanelActions(
@@ -306,6 +307,8 @@ data class AdminPanelActions(
     val onExtendMaintenance: (Int, Int, Boolean) -> Unit = { _, _, _ -> },
     val onDisableMaintenance: () -> Unit = {},
     val onClearMaintenanceFeedback: () -> Unit = {},
+    val onTogglePauseLeaderboard: (Boolean) -> Unit = {},
+    val onExtendLeaderboard: (Long) -> Unit = {},
     val onBack: () -> Unit = {}
 )
 
@@ -344,6 +347,7 @@ class AdminScreenScope(
     val serverTimeOffsetMs get() = state.serverTimeOffsetMs
     val isUpdatingMaintenance get() = state.isUpdatingMaintenance
     val maintenanceFeedback get() = state.maintenanceFeedback
+    val leaderboardCycle get() = state.leaderboardCycle
 
     val onAddQuestion get() = actions.onAddQuestion
     val onGenerate180QuestionsForSet get() = actions.onGenerate180QuestionsForSet
@@ -412,6 +416,8 @@ class AdminScreenScope(
     val onExtendMaintenance get() = actions.onExtendMaintenance
     val onDisableMaintenance get() = actions.onDisableMaintenance
     val onClearMaintenanceFeedback get() = actions.onClearMaintenanceFeedback
+    val onTogglePauseLeaderboard get() = actions.onTogglePauseLeaderboard
+    val onExtendLeaderboard get() = actions.onExtendLeaderboard
     val onBack get() = actions.onBack
 }
 
@@ -7615,11 +7621,14 @@ private fun AdminScreenScope.AdminPanelContent() {
                         SystemControlsMaintenanceCard(
                             isSystemShutdown = isSystemShutdown,
                             isResettingLeaderboard = isResettingLeaderboard,
+                            leaderboardCycle = leaderboardCycle,
                             onRequestResetLeaderboard = { showResetLeaderboardConfirmDialog = true },
                             onRequestToggleSystemShutdown = { targetState ->
                                 pendingShutdownTargetState = targetState
                                 showShutdownConfirmDialog = true
-                            }
+                            },
+                            onTogglePauseLeaderboard = onTogglePauseLeaderboard,
+                            onExtendLeaderboard = onExtendLeaderboard
                         )
                     }
                 }

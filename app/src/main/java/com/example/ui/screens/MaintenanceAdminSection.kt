@@ -71,6 +71,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.MaintenanceConfig
 import com.example.data.MaintenanceControlConfig
+import com.example.data.SystemControlConfig
 import com.example.ui.theme.KcetErrorRed
 import com.example.ui.theme.KcetIndigoPrimary
 import com.example.ui.theme.KcetSuccessGreen
@@ -829,8 +830,11 @@ private fun AdminLiveMaintenanceStatusPanel(
 fun SystemControlsMaintenanceCard(
     isSystemShutdown: Boolean,
     isResettingLeaderboard: Boolean,
+    leaderboardCycle: SystemControlConfig.LeaderboardCycleStatus,
     onRequestResetLeaderboard: () -> Unit,
-    onRequestToggleSystemShutdown: (Boolean) -> Unit
+    onRequestToggleSystemShutdown: (Boolean) -> Unit,
+    onTogglePauseLeaderboard: (Boolean) -> Unit,
+    onExtendLeaderboard: (Long) -> Unit
 ) {
     Surface(
         color = if (isSystemShutdown) Color(0xFF450A0A) else Color(0xFF1E1B4B),
@@ -847,7 +851,7 @@ fun SystemControlsMaintenanceCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Text(
                 text = "System & Leaderboard Controls",
@@ -924,6 +928,95 @@ fun SystemControlsMaintenanceCard(
                             .testTag("admin_system_shutdown_toggle")
                             .semantics { contentDescription = "System Shutdown toggle" }
                     )
+                }
+            }
+
+            HorizontalDivider(color = Color.White.copy(alpha = 0.12f))
+
+            // Leaderboard Timer Pause & Extra Time Controls
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "30-Day Season Timer Control",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = if (leaderboardCycle.isPaused) "Timer Paused ⏸️" else "Timer Running ⏱️",
+                            fontSize = 10.sp,
+                            color = if (leaderboardCycle.isPaused) Color(0xFFFBBF24) else Color(0xFF34D399)
+                        )
+                    }
+                    Button(
+                        onClick = { onTogglePauseLeaderboard(!leaderboardCycle.isPaused) },
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (leaderboardCycle.isPaused) Color(0xFF059669) else Color(0xFFB45309)
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.heightIn(min = 36.dp)
+                    ) {
+                        Text(
+                            text = if (leaderboardCycle.isPaused) "Resume Timer" else "Pause Timer",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Text(
+                    text = "Add Extra Time to Season Timer:",
+                    fontSize = 11.sp,
+                    color = Color(0xFFCBD5E1),
+                    fontWeight = FontWeight.Medium
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Button(
+                        onClick = { onExtendLeaderboard(3600_000L) }, // +1 Hour
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF312E81)),
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(4.dp)
+                    ) {
+                        Text("+1 Hr", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Button(
+                        onClick = { onExtendLeaderboard(24L * 3600_000L) }, // +1 Day
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF312E81)),
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(4.dp)
+                    ) {
+                        Text("+1 Day", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Button(
+                        onClick = { onExtendLeaderboard(7L * 24L * 3600_000L) }, // +7 Days
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF312E81)),
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(4.dp)
+                    ) {
+                        Text("+7 Days", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Button(
+                        onClick = { onExtendLeaderboard(30L * 24L * 3600_000L) }, // +30 Days
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4C1D95)),
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(4.dp)
+                    ) {
+                        Text("+30 Days", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
 

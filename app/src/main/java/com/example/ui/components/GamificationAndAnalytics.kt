@@ -39,10 +39,13 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -1374,13 +1377,33 @@ fun LeaderboardSeasonResetTimerBanner(
     leaderboardCycle: SystemControlConfig.LeaderboardCycleStatus,
     remainingMillisFlow: StateFlow<Long>?
 ) {
-    val fallbackFlow = remember { MutableStateFlow(SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS) }
-    val remainingMs by (remainingMillisFlow ?: fallbackFlow).collectAsStateWithLifecycle()
+    var localTickMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(leaderboardCycle.isPaused) {
+        while (!leaderboardCycle.isPaused) {
+            delay(1000L)
+            localTickMs = System.currentTimeMillis()
+        }
+    }
+
+    val flowRemainingMs = remainingMillisFlow?.collectAsStateWithLifecycle()?.value
+    val remainingMs = remember(flowRemainingMs, localTickMs, leaderboardCycle) {
+        if (leaderboardCycle.isPaused && leaderboardCycle.pausedRemainingMillis > 0L) {
+            leaderboardCycle.pausedRemainingMillis
+        } else if (flowRemainingMs != null && flowRemainingMs > 0L) {
+            flowRemainingMs
+        } else {
+            leaderboardCycle.remainingMillis(localTickMs)
+        }
+    }
     val parts = remember(remainingMs) {
         SystemControlConfig.formatLeaderboardCountdownParts(remainingMs)
     }
-    val resetDateLabel = remember(leaderboardCycle.effectiveNextResetAtMillis) {
-        SystemControlConfig.formatLeaderboardResetDateText(leaderboardCycle.effectiveNextResetAtMillis)
+    val resetDateLabel = remember(leaderboardCycle.effectiveNextResetAtMillis, leaderboardCycle.isPaused) {
+        if (leaderboardCycle.isPaused) {
+            "Paused • Resumes upon admin activation"
+        } else {
+            SystemControlConfig.formatLeaderboardResetDateText(leaderboardCycle.effectiveNextResetAtMillis)
+        }
     }
     val progress = remember(remainingMs, leaderboardCycle) {
         val total = SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS.toFloat()
@@ -1433,23 +1456,30 @@ fun LeaderboardSeasonResetTimerBanner(
                             color = Color.White
                         )
                         Text(
-                            text = "All student XP resets to 0 XP automatically",
+                            text = if (leaderboardCycle.isPaused) "Season timer paused by administrator" else "All student XP resets to 0 XP automatically",
                             fontSize = 10.sp,
-                            color = Color(0xFFC7D2FE)
+                            color = if (leaderboardCycle.isPaused) Color(0xFFFDE68A) else Color(0xFFC7D2FE)
                         )
                     }
                 }
 
                 Surface(
                     shape = RoundedCornerShape(8.dp),
-                    color = Color(0xFFF59E0B).copy(alpha = 0.2f),
-                    border = androidx.compose.foundation.BorderStroke(0.8.dp, Color(0xFFFBBF24).copy(alpha = 0.6f))
+                    color = if (leaderboardCycle.isPaused) Color(0xFFEF4444).copy(alpha = 0.25f) else Color(0xFFF59E0B).copy(alpha = 0.2f),
+                    border = androidx.compose.foundation.BorderStroke(
+                        0.8.dp,
+                        if (leaderboardCycle.isPaused) Color(0xFFF87171).copy(alpha = 0.8f) else Color(0xFFFBBF24).copy(alpha = 0.6f)
+                    )
                 ) {
                     Text(
-                        text = if (remainingMs == 0L) "RESETTING..." else "LIVE",
+                        text = when {
+                            leaderboardCycle.isPaused -> "PAUSED ⏸️"
+                            remainingMs == 0L -> "RESETTING..."
+                            else -> "LIVE ⏱️"
+                        },
                         fontSize = 9.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        color = Color(0xFFFDE68A),
+                        color = if (leaderboardCycle.isPaused) Color(0xFFFCA5A5) else Color(0xFFFDE68A),
                         letterSpacing = 0.8.sp,
                         modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                     )

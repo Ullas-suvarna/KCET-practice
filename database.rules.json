@@ -13,6 +13,30 @@
       "pricing": {
         ".read": true,
         ".write": "auth != null && auth.token.email === 'ullassuvarna65@gmail.com' && auth.token.email_verified === true"
+      },
+      "leaderboardCycleStartAt": {
+        ".read": true,
+        ".write": true
+      },
+      "leaderboardNextResetAt": {
+        ".read": true,
+        ".write": true
+      },
+      "leaderboardResetAt": {
+        ".read": true,
+        ".write": true
+      },
+      "isPaused": {
+        ".read": true,
+        ".write": true
+      },
+      "pausedAtMillis": {
+        ".read": true,
+        ".write": true
+      },
+      "pausedRemainingMillis": {
+        ".read": true,
+        ".write": true
       }
     }
   }

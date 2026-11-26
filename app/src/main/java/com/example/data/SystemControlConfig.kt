@@ -101,7 +101,10 @@ object SystemControlConfig {
     data class LeaderboardCycleStatus(
         val lastResetAtMillis: Long = 0L,
         val cycleStartAtMillis: Long = 0L,
-        val nextResetAtMillis: Long = 0L
+        val nextResetAtMillis: Long = 0L,
+        val isPaused: Boolean = false,
+        val pausedAtMillis: Long = 0L,
+        val pausedRemainingMillis: Long = 0L
     ) {
         val effectiveCycleStartAtMillis: Long
             get() = when {
@@ -119,6 +122,9 @@ object SystemControlConfig {
             }
 
         fun remainingMillis(nowMillis: Long): Long {
+            if (isPaused && pausedRemainingMillis > 0L) {
+                return pausedRemainingMillis
+            }
             val target = effectiveNextResetAtMillis
             if (target <= 0L) return LEADERBOARD_CYCLE_DURATION_MS
             return (target - nowMillis).coerceAtLeast(0L)
@@ -129,11 +135,13 @@ object SystemControlConfig {
             val end = effectiveNextResetAtMillis
             if (start <= 0L || end <= start) return 0f
             val total = (end - start).toFloat()
-            val elapsed = (nowMillis - start).coerceIn(0L, end - start).toFloat()
+            val rem = remainingMillis(nowMillis)
+            val elapsed = (total - rem).coerceIn(0f, total)
             return (elapsed / total).coerceIn(0f, 1f)
         }
 
         fun isDueForReset(nowMillis: Long): Boolean {
+            if (isPaused) return false
             val target = effectiveNextResetAtMillis
             return target > 0L && nowMillis >= target
         }

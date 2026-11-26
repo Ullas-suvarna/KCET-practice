@@ -4830,11 +4830,17 @@ object FirebaseService {
         val resetAt = extractMillis(doc, "leaderboardResetAt") ?: 0L
         val cycleStart = extractMillis(doc, "leaderboardCycleStartAt") ?: 0L
         val nextReset = extractMillis(doc, "leaderboardNextResetAt") ?: 0L
+        val isPaused = extractBoolean(doc, "isPaused") ?: false
+        val pausedAt = extractMillis(doc, "pausedAtMillis") ?: 0L
+        val pausedRem = extractMillis(doc, "pausedRemainingMillis") ?: 0L
         if (resetAt <= 0L && cycleStart <= 0L && nextReset <= 0L) return null
         return SystemControlConfig.LeaderboardCycleStatus(
             lastResetAtMillis = resetAt,
             cycleStartAtMillis = if (cycleStart > 0L) cycleStart else resetAt,
-            nextResetAtMillis = if (nextReset > 0L) nextReset else (if (resetAt > 0L) resetAt + SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS else 0L)
+            nextResetAtMillis = if (nextReset > 0L) nextReset else (if (resetAt > 0L) resetAt + SystemControlConfig.LEADERBOARD_CYCLE_DURATION_MS else 0L),
+            isPaused = isPaused,
+            pausedAtMillis = pausedAt,
+            pausedRemainingMillis = pausedRem
         )
     }
 
@@ -4880,7 +4886,7 @@ object FirebaseService {
 
     suspend fun ensureLeaderboardCycleSeeded(nowMillis: Long = System.currentTimeMillis()): SystemControlConfig.LeaderboardCycleStatus {
         val existing = getLeaderboardCycleOnce()
-        if (existing != null && existing.effectiveNextResetAtMillis > 0L) {
+        if (existing != null && existing.effectiveNextResetAtMillis > nowMillis) {
             return existing
         }
 
@@ -4913,6 +4919,56 @@ object FirebaseService {
         }
 
         return initialCycle
+    }
+
+    suspend fun setLeaderboardPauseState(paused: Boolean): Boolean {
+        val now = System.currentTimeMillis()
+        val currentCycle = getLeaderboardCycleOnce() ?: SystemControlConfig.createLeaderboardCycleFromReset(now)
+        val rem = currentCycle.remainingMillis(now)
+        val updated = currentCycle.copy(
+            isPaused = paused,
+            pausedAtMillis = if (paused) now else 0L,
+            pausedRemainingMillis = if (paused) rem else 0L,
+            nextResetAtMillis = if (!paused && currentCycle.pausedRemainingMillis > 0L) now + currentCycle.pausedRemainingMillis else currentCycle.nextResetAtMillis
+        )
+        return saveLeaderboardCycleToFirebase(updated)
+    }
+
+    suspend fun extendLeaderboardCycle(extraMillis: Long): Boolean {
+        val now = System.currentTimeMillis()
+        val currentCycle = getLeaderboardCycleOnce() ?: SystemControlConfig.createLeaderboardCycleFromReset(now)
+        val currentRem = currentCycle.remainingMillis(now)
+        val newNextReset = if (currentCycle.isPaused) {
+            currentCycle.nextResetAtMillis + extraMillis
+        } else {
+            now + currentRem + extraMillis
+        }
+        val updated = currentCycle.copy(
+            nextResetAtMillis = newNextReset,
+            pausedRemainingMillis = if (currentCycle.isPaused) currentCycle.pausedRemainingMillis + extraMillis else 0L
+        )
+        return saveLeaderboardCycleToFirebase(updated)
+    }
+
+    suspend fun saveLeaderboardCycleToFirebase(cycle: SystemControlConfig.LeaderboardCycleStatus): Boolean {
+        return try {
+            val payload = mapOf<String, Any>(
+                "leaderboardCycleStartAt" to cycle.effectiveCycleStartAtMillis,
+                "leaderboardNextResetAt" to cycle.effectiveNextResetAtMillis,
+                "isPaused" to cycle.isPaused,
+                "pausedAtMillis" to cycle.pausedAtMillis,
+                "pausedRemainingMillis" to cycle.pausedRemainingMillis,
+                "leaderboardResetAt" to cycle.lastResetAtMillis
+            )
+            firestore.collection("admin_config").document("leaderboard")
+                .set(payload, com.google.firebase.firestore.SetOptions.merge())
+                .awaitResult()
+            FirebaseRealtimeService.saveLeaderboardCycleToRTDB(cycle)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving leaderboard cycle: ${e.message}", e)
+            false
+        }
     }
 
     fun observeLeaderboardResetAt(): Flow<Long> = callbackFlow {
